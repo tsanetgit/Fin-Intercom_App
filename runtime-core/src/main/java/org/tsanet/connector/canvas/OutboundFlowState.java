@@ -48,27 +48,27 @@ public final class OutboundFlowState {
         return flowId;
     }
 
-    public List<PartnerHit> hits() {
+    public synchronized List<PartnerHit> hits() {
         return hits;
     }
 
-    public void hits(List<PartnerHit> hits) {
+    public synchronized void hits(List<PartnerHit> hits) {
         this.hits = List.copyOf(hits);
     }
 
-    public PartnerHit partner() {
+    public synchronized PartnerHit partner() {
         return partner;
     }
 
-    public void partner(PartnerHit partner) {
+    public synchronized void partner(PartnerHit partner) {
         this.partner = partner;
     }
 
-    public ProcessForm form() {
+    public synchronized ProcessForm form() {
         return form;
     }
 
-    public void form(ProcessForm form) {
+    public synchronized void form(ProcessForm form) {
         this.form = form;
     }
 
@@ -77,11 +77,11 @@ public final class OutboundFlowState {
     }
 
     /** Drops form-field values (keys {@code f_*}); summary/description survive a partner change. */
-    public void clearFieldValues() {
+    public synchronized void clearFieldValues() {
         values.keySet().removeIf(k -> k.startsWith("f_"));
     }
 
-    public SubmissionResult result() {
+    public synchronized SubmissionResult result() {
         return result;
     }
 

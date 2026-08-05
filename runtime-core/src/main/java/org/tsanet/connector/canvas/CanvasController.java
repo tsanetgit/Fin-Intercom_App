@@ -6,6 +6,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -32,6 +34,8 @@ import org.tsanet.connector.tsanet.dto.SubmissionResult;
  */
 @RestController
 public class CanvasController {
+
+    private static final Logger log = LoggerFactory.getLogger(CanvasController.class);
 
     private final FlowStateStore flows;
     private final TsanetGateway gateway;
@@ -152,15 +156,19 @@ public class CanvasController {
                             + " case can be submitted via the TSANet web app."),
                     CanvasKit.button("back_home", "Start over")), pointer(state));
         }
-        PartnerHit previous = state.partner();
-        if (previous == null || !sameTarget(previous, partner)) {
-            // A different partner means a different process form; values typed for the
-            // old form must not pre-fill (or ride into a submission against) the new one.
-            state.clearFieldValues();
+        synchronized (state) {
+            PartnerHit previous = state.partner();
+            if (previous == null || !sameTarget(previous, partner)) {
+                // A different partner means a different process form; values typed for
+                // the old form must not pre-fill (or ride into a submission against)
+                // the new one.
+                state.clearFieldValues();
+            }
+            // Set as a pair under the monitor: form must always match partner.
+            state.partner(partner);
+            state.form(form);
+            return formCanvas(state, null);
         }
-        state.partner(partner);
-        state.form(form);
-        return formCanvas(state, null);
     }
 
     private static boolean sameTarget(PartnerHit a, PartnerHit b) {
@@ -198,35 +206,40 @@ public class CanvasController {
 
     private Map<String, Object> doSubmit(OutboundFlowState state, Map<String, Object> payload,
             Map<String, String> inputs, boolean retry) {
-        if (state.form() == null || state.partner() == null) {
-            return home(flows.create(), surface(payload), "That panel session lost its form; starting over.");
-        }
-        if (!retry) {
-            // Concurrent losers may interleave this putAll before losing the claim
-            // below; same agent, same form, so mixed values are equivalent, not corrupt.
-            state.values().putAll(inputs);
-        }
-        List<String> missing = new ArrayList<>();
-        if (blank(state.values().get("summary"))) {
-            missing.add("Problem summary");
-        }
-        if (blank(state.values().get("description"))) {
-            missing.add("Problem description");
-        }
-        for (FormField field : state.form().fields()) {
-            if (field.required() && blank(state.values().get("f_" + field.fieldId()))) {
-                missing.add(field.label());
+        SubmissionDraft draft;
+        // One monitor section covers merge -> validate -> claim -> snapshot, so a
+        // concurrent select cannot swap the form between validation and the draft, and
+        // no value can arrive after validation has read them (QA round-2 lock-scope
+        // note). The gateway call stays outside the lock; contention is per-flow.
+        synchronized (state) {
+            if (state.form() == null || state.partner() == null) {
+                return home(flows.create(), surface(payload), "That panel session lost its form; starting over.");
             }
+            if (!retry) {
+                state.values().putAll(inputs);
+            }
+            List<String> missing = new ArrayList<>();
+            if (blank(state.values().get("summary"))) {
+                missing.add("Problem summary");
+            }
+            if (blank(state.values().get("description"))) {
+                missing.add("Problem description");
+            }
+            for (FormField field : state.form().fields()) {
+                if (field.required() && blank(state.values().get("f_" + field.fieldId()))) {
+                    missing.add(field.label());
+                }
+            }
+            if (!missing.isEmpty()) {
+                return formCanvas(state, "Missing required: " + String.join(", ", missing));
+            }
+            // The one legal submit is claiming DRAFT -> SUBMITTING; losing the claim
+            // means another view already submitted (or the outcome is known).
+            if (!state.beginSubmit()) {
+                return renderByStatus(state, surface(payload), null);
+            }
+            draft = draftFrom(state, payload);
         }
-        if (!missing.isEmpty()) {
-            return formCanvas(state, "Missing required: " + String.join(", ", missing));
-        }
-        // The one legal submit is claiming DRAFT -> SUBMITTING; losing the claim means
-        // another view already submitted (or the outcome is known): render, don't act.
-        if (!state.beginSubmit()) {
-            return renderByStatus(state, surface(payload), null);
-        }
-        SubmissionDraft draft = draftFrom(state, payload);
         try {
             SubmissionResult result = gateway.submit(draft);
             state.landed(result);
@@ -241,6 +254,15 @@ public class CanvasController {
             // definitively rejected the request before a case could exist.
             state.submitFailed();
             return formCanvas(state, "Submission failed (" + e.getMessage() + "); fix and resubmit.");
+        } catch (RuntimeException e) {
+            // tsanetgit/Fin-Intercom_App#2: an exception outside the gateway taxonomy
+            // is by definition an ambiguous outcome (the taxonomy's own rule). Without
+            // this, the flow stays SUBMITTING forever — a state whose only exit needs a
+            // lookup to FIND a case — and the panel is dead for the conversation.
+            log.error("gateway.submit threw outside the taxonomy; treating as ambiguous (flow {})",
+                    state.flowId(), e);
+            state.submitUnresolved();
+            return pendingCanvas(state);
         }
     }
 
