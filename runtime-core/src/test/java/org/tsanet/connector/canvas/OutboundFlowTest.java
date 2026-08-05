@@ -18,6 +18,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.tsanet.connector.tsanet.TsanetGateway;
 
 /**
  * Walks the whole outbound flow, signed, against the fake gateway. Every step asserts
@@ -34,6 +35,10 @@ class OutboundFlowTest {
 
     @Autowired
     private MockMvc mvc;
+
+    /** The fake gateway bean, read directly to observe what the flow actually submitted. */
+    @Autowired
+    private TsanetGateway gateway;
 
     private final ObjectMapper json = new ObjectMapper();
 
@@ -181,5 +186,83 @@ class OutboundFlowTest {
         assertNotNull(flowId(fresh));
         assertTrue(!flow.equals(flowId(fresh)),
                 "internalCaseNumber == flowId, so a new collaboration needs a new flow id");
+    }
+
+    @Test
+    void retrySubmitWhileUnresolvedCannotReachTheGateway() throws Exception {
+        // QA finding 1: retry_submit used to bypass the pending guard, trusting the
+        // client-supplied component id to prove a reconcile happened.
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:0", "{}");
+        submit(flow, "submit_case",
+                "{\"summary\":\"please timeout now\",\"description\":\"desc\",\"f_88\":\"SN-4\",\"f_89\":\"Low\"}");
+        String tokenBefore = gateway.findSubmission(flow).orElseThrow().token();
+
+        JsonNode blocked = submit(flow, "retry_submit", "{}");
+        assertTrue(allText(blocked).contains("Submission status unknown"),
+                "retry while unresolved must be forced onto the reconcile path");
+        assertEquals(tokenBefore, gateway.findSubmission(flow).orElseThrow().token(),
+                "the gateway must not have been asked to submit a second time");
+    }
+
+    @Test
+    void backHomeWhileUnresolvedKeepsTheFlow() throws Exception {
+        // QA finding 3: "Start over" from the unresolved canvas minted a fresh flow id,
+        // severing the only key that can ever reconcile the possibly-created case.
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:0", "{}");
+        submit(flow, "submit_case",
+                "{\"summary\":\"please timeout now\",\"description\":\"desc\",\"f_88\":\"SN-5\",\"f_89\":\"Low\"}");
+
+        JsonNode refused = submit(flow, "back_home", "{}");
+        assertEquals(flow, flowId(refused), "starting over while unresolved must keep the flow id");
+        assertTrue(allText(refused).contains("Submission status unknown"));
+
+        JsonNode reconciled = submit(flow, "check_status", "{}");
+        assertTrue(allText(reconciled).contains("Case submitted"));
+        JsonNode fresh = submit(flow, "back_home", "{}");
+        assertTrue(!flow.equals(flowId(fresh)), "after the outcome is known, starting over is legal");
+    }
+
+    @Test
+    void reconcileNotFoundReArmsSubmitServerSide() throws Exception {
+        // The legal retry path: only a lookup that found nothing (recorded server-side
+        // as the UNRESOLVED -> DRAFT transition) re-arms submission for this flow.
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:0", "{}");
+        submit(flow, "submit_case",
+                "{\"summary\":\"please timeout-lost now\",\"description\":\"desc\",\"f_88\":\"SN-6\",\"f_89\":\"Low\"}");
+        assertTrue(gateway.findSubmission(flow).isEmpty(), "the lost request must not have recorded a case");
+
+        JsonNode blocked = submit(flow, "retry_submit", "{}");
+        assertTrue(allText(blocked).contains("Submission status unknown"),
+                "before any reconcile, retry stays blocked");
+
+        JsonNode notFound = submit(flow, "check_status", "{}");
+        String notFoundText = allText(notFound);
+        assertTrue(notFoundText.contains("No case found yet"));
+        assertTrue(notFoundText.contains("Retry submission"));
+
+        JsonNode confirmed = submit(flow, "submit_case",
+                "{\"summary\":\"real summary this time\",\"description\":\"desc\",\"f_88\":\"SN-6\",\"f_89\":\"Low\"}");
+        assertTrue(allText(confirmed).contains("Case submitted"),
+                "after a reconcile that found nothing, submitting is legal again");
+    }
+
+    @Test
+    void unknownComponentPreservesFlowAndStep() throws Exception {
+        // QA finding 6: the dispatch fallthrough used to reset to a fresh flow,
+        // silently destroying the agent's typed work on an unexpected component id.
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:0", "{}");
+
+        JsonNode rendered = submit(flow, "bogus_component_zzz", "{}");
+        assertEquals(flow, flowId(rendered), "an unknown component must not reset the flow");
+        assertTrue(allText(rendered).contains("NetApp | Storage Division"),
+                "the current step (the form) must re-render instead of home");
     }
 }

@@ -23,8 +23,10 @@ import org.tsanet.connector.tsanet.dto.SubmissionResult;
  * search "failsearch" throws; the partner whose departmentId is 999 fails form fetch;
  * a draft whose summary contains "timeout" records the submission server-side and THEN
  * throws GatewayTimeoutException, simulating the succeeded-but-client-timed-out case
- * that findSubmission must reconcile. The partner "Unsupported Co" returns a form with
- * a FILES field to exercise the loud unsupported-type failure.
+ * that findSubmission must reconcile; a summary containing "timeout-lost" throws the
+ * same WITHOUT recording, simulating a request that died in transit so the reconcile
+ * lookup finds nothing. The partner "Unsupported Co" returns a form with a FILES field
+ * to exercise the loud unsupported-type failure.
  */
 @Component
 @ConditionalOnProperty(name = "connector.tsanet.mode", havingValue = "fake", matchIfMissing = true)
@@ -82,12 +84,16 @@ public class FakeTsanetGateway implements TsanetGateway {
 
     @Override
     public SubmissionResult submit(SubmissionDraft draft) {
+        String summary = draft.summary() == null ? "" : draft.summary().toLowerCase();
+        if (summary.contains("timeout-lost")) {
+            throw new GatewayTimeoutException("injected submit timeout (request lost in transit)");
+        }
         SubmissionResult result = new SubmissionResult(
                 "TSA-" + UUID.randomUUID().toString().substring(0, 8),
                 Instant.now().plus(2, ChronoUnit.HOURS).toString(),
                 true);
         submitted.put(draft.internalCaseNumber(), result);
-        if (draft.summary() != null && draft.summary().toLowerCase().contains("timeout")) {
+        if (summary.contains("timeout")) {
             throw new GatewayTimeoutException("injected submit timeout (case recorded server-side)");
         }
         return result;

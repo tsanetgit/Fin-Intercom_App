@@ -7,6 +7,7 @@ import java.util.stream.Collectors;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.tsanet.connector.canvas.OutboundFlowState.Status;
 import org.tsanet.connector.tsanet.GatewayException;
 import org.tsanet.connector.tsanet.GatewayTimeoutException;
 import org.tsanet.connector.tsanet.TsanetGateway;
@@ -20,8 +21,12 @@ import org.tsanet.connector.tsanet.dto.SubmissionResult;
  * The outbound submission flow (Phase 1 slice 1). Budget rule (docs/decisions.md D2,
  * amended): at most ONE bounded gateway call per canvas response, no in-handler
  * retries; read timeouts render a retry path, and a submit timeout goes through the
- * findSubmission reconcile before any resubmission, because submits are not idempotent.
- * Flow state lives server-side behind an opaque pointer in stored_data (D8).
+ * findSubmission reconcile before any resubmission, because submits are not idempotent
+ * and the Connect API rejects no duplicates (D2: reconcile is best-effort). Flow state
+ * lives server-side behind an opaque pointer in stored_data (D8); the submission's
+ * lifecycle is OutboundFlowState.Status, and every handler that could create or orphan
+ * a case is gated on it server-side — client-supplied component ids are never trusted
+ * to prove a reconcile happened.
  */
 @RestController
 public class CanvasController {
@@ -50,8 +55,22 @@ public class CanvasController {
         Map<String, String> inputs = inputValues(payload);
 
         if ("back_home".equals(component)) {
+            Status status = state.status();
+            if (status == Status.SUBMITTING || status == Status.UNRESOLVED) {
+                // Starting over here would mint a fresh flow id == fresh
+                // internalCaseNumber and orphan the possibly-created case.
+                return renderByStatus(state, surface, null);
+            }
             // New flow id on purpose: internalCaseNumber == flowId, one per submission.
             return home(flows.create(), surface, null);
+        }
+        if ("check_status".equals(component)) {
+            return doCheckStatus(state);
+        }
+        if (state.status() != Status.DRAFT) {
+            // Search/select/submit from a stale view of a flow whose submission is in
+            // flight, unresolved, or landed: render the truth instead of acting.
+            return renderByStatus(state, surface, null);
         }
         if ("search".equals(component)) {
             return doSearch(state, surface, inputs.getOrDefault("q", "").trim());
@@ -62,10 +81,9 @@ public class CanvasController {
         if ("submit_case".equals(component) || "retry_submit".equals(component)) {
             return doSubmit(state, payload, inputs, "retry_submit".equals(component));
         }
-        if ("check_status".equals(component)) {
-            return doCheckStatus(state);
-        }
-        return home(flows.create(), surface, null);
+        // Unknown component (live Canvas Kit shapes may surprise us, D8): re-render the
+        // current step rather than destroying the flow and the agent's typed work.
+        return renderByStatus(state, surface, null);
     }
 
     // ---- steps ----
@@ -84,9 +102,16 @@ public class CanvasController {
             return home(state, surface, "No partners matched \"" + query + "\".");
         }
         state.hits(hits);
+        return resultsCanvas(state, hits.size() + " result(s) for \"" + query + "\"");
+    }
+
+    private Map<String, Object> resultsCanvas(OutboundFlowState state, String subtitle) {
         List<Map<String, Object>> components = new ArrayList<>();
         components.add(CanvasKit.header("Select a partner"));
-        components.add(CanvasKit.muted(hits.size() + " result(s) for \"" + query + "\""));
+        if (subtitle != null) {
+            components.add(CanvasKit.muted(subtitle));
+        }
+        List<PartnerHit> hits = state.hits();
         for (int i = 0; i < hits.size(); i++) {
             components.add(CanvasKit.button("select:" + i, hits.get(i).display()));
         }
@@ -163,15 +188,6 @@ public class CanvasController {
         if (state.form() == null || state.partner() == null) {
             return home(flows.create(), surface(payload), "That panel session lost its form; starting over.");
         }
-        // Re-entry guards: the same flow can be open in two tabs (or two teammates'
-        // panels). A landed submit renders its outcome; an unresolved one forces the
-        // reconcile path. Either way, no second gateway.submit for this flow.
-        if (state.result() != null) {
-            return confirmation(state);
-        }
-        if (state.submitPending() && !retry) {
-            return pendingCanvas(state);
-        }
         if (!retry) {
             state.values().putAll(inputs);
         }
@@ -190,16 +206,21 @@ public class CanvasController {
         if (!missing.isEmpty()) {
             return formCanvas(state, "Missing required: " + String.join(", ", missing));
         }
+        // The one legal submit is claiming DRAFT -> SUBMITTING; losing the claim means
+        // another view already submitted (or the outcome is known): render, don't act.
+        if (!state.beginSubmit()) {
+            return renderByStatus(state, surface(payload), null);
+        }
         SubmissionDraft draft = draftFrom(state, payload);
         try {
             SubmissionResult result = gateway.submit(draft);
-            state.result(result);
-            state.submitPending(false);
+            state.landed(result);
             return confirmation(state);
         } catch (GatewayTimeoutException e) {
-            state.submitPending(true);
+            state.submitUnresolved();
             return pendingCanvas(state);
         } catch (GatewayException e) {
+            state.submitFailed();
             return formCanvas(state, "Submission failed (" + e.getMessage() + "); fix and resubmit.");
         }
     }
@@ -208,31 +229,68 @@ public class CanvasController {
         return CanvasKit.canvas(List.of(
                 CanvasKit.header("Submission status unknown"),
                 CanvasKit.error("The request timed out but may still have created the case."
-                        + " Check the status before retrying, to avoid a duplicate partner case."),
-                CanvasKit.button("check_status", "Check status"),
+                        + " Check the status before doing anything else; a blind retry or a fresh"
+                        + " start can duplicate the partner case."),
+                CanvasKit.button("check_status", "Check status")), pointer(state));
+    }
+
+    private Map<String, Object> inProgressCanvas(OutboundFlowState state) {
+        return CanvasKit.canvas(List.of(
+                CanvasKit.header("Submission in progress"),
+                CanvasKit.muted("This flow is being submitted in another view right now."
+                        + " Check the status in a moment."),
+                CanvasKit.button("check_status", "Check status")), pointer(state));
+    }
+
+    private Map<String, Object> notFoundCanvas(OutboundFlowState state) {
+        return CanvasKit.canvas(List.of(
+                CanvasKit.header("No case found yet"),
+                CanvasKit.muted("No case was found for this submission's reference. If the timeout"
+                        + " just happened, the original request may still be processing — checking"
+                        + " again shortly is safest. Retrying will create the case if none exists."),
+                CanvasKit.button("retry_submit", "Retry submission"),
+                CanvasKit.button("check_status", "Check again"),
                 CanvasKit.button("back_home", "Start over")), pointer(state));
     }
 
     private Map<String, Object> doCheckStatus(OutboundFlowState state) {
+        if (state.status() == Status.LANDED) {
+            return confirmation(state);
+        }
         try {
             return gateway.findSubmission(state.flowId())
                     .map(result -> {
-                        state.result(result);
-                        state.submitPending(false);
+                        state.landed(result);
                         return confirmation(state);
                     })
-                    .orElseGet(() -> CanvasKit.canvas(List.of(
-                            CanvasKit.header("No case found yet"),
-                            CanvasKit.muted("The submission did not go through. It is safe to retry."),
-                            CanvasKit.button("retry_submit", "Retry submission"),
-                            CanvasKit.button("back_home", "Start over")), pointer(state)));
+                    .orElseGet(() -> {
+                        if (state.reconcileNotFound()) {
+                            return notFoundCanvas(state);
+                        }
+                        return switch (state.status()) {
+                            case LANDED -> confirmation(state);
+                            case SUBMITTING -> inProgressCanvas(state);
+                            // DRAFT: an earlier lookup already re-armed retry.
+                            default -> notFoundCanvas(state);
+                        };
+                    });
         } catch (GatewayException e) {
             return CanvasKit.canvas(List.of(
                     CanvasKit.header("Submission status unknown"),
                     CanvasKit.error("Status check failed (" + e.getMessage() + "); try again."),
-                    CanvasKit.button("check_status", "Check status"),
-                    CanvasKit.button("back_home", "Start over")), pointer(state));
+                    CanvasKit.button("check_status", "Check status")), pointer(state));
         }
+    }
+
+    private Map<String, Object> renderByStatus(OutboundFlowState state, String surface, String notice) {
+        return switch (state.status()) {
+            case LANDED -> confirmation(state);
+            case UNRESOLVED -> pendingCanvas(state);
+            case SUBMITTING -> inProgressCanvas(state);
+            case DRAFT -> state.form() != null ? formCanvas(state, notice)
+                    : !state.hits().isEmpty() ? resultsCanvas(state, notice)
+                    : home(state, surface, notice);
+        };
     }
 
     private Map<String, Object> confirmation(OutboundFlowState state) {
