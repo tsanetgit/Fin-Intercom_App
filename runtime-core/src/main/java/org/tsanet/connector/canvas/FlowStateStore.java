@@ -19,19 +19,23 @@ public class FlowStateStore {
     private static final int CAPACITY = 1000;
     private static final Duration TTL = Duration.ofMinutes(30);
 
-    private final Map<String, Entry> flows = new LinkedHashMap<>(16, 0.75f, true) {
+    // Named Flow, not Entry: inside the anonymous LinkedHashMap subclass the simple
+    // name Entry binds to the inherited Map.Entry on javac 26+, which silently breaks
+    // the removeEldestEntry override (compile error there, name clash). javac 21
+    // resolved it the other way; the distinct name compiles on both.
+    private final Map<String, Flow> flows = new LinkedHashMap<>(16, 0.75f, true) {
         @Override
-        protected boolean removeEldestEntry(Map.Entry<String, Entry> eldest) {
+        protected boolean removeEldestEntry(Map.Entry<String, Flow> eldest) {
             return size() > CAPACITY;
         }
     };
 
-    private record Entry(OutboundFlowState state, Instant createdAt) {
+    private record Flow(OutboundFlowState state, Instant createdAt) {
     }
 
     public synchronized OutboundFlowState create() {
         OutboundFlowState state = new OutboundFlowState(UUID.randomUUID().toString());
-        flows.put(state.flowId(), new Entry(state, Instant.now()));
+        flows.put(state.flowId(), new Flow(state, Instant.now()));
         return state;
     }
 
@@ -39,7 +43,7 @@ public class FlowStateStore {
         if (flowId == null) {
             return null;
         }
-        Entry entry = flows.get(flowId);
+        Flow entry = flows.get(flowId);
         if (entry == null) {
             return null;
         }
