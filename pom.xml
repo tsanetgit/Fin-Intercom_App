@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <!-- Pinned to match shawn-tsanet/connect-sdk-demo (the stack this runtime adopts). -->
+    <version>3.3.4</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>org.tsanet.connector</groupId>
+  <artifactId>tsanet-intercom-connector</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <name>TSANet Connect connector for Fin/Intercom</name>
+  <description>Headless runtime behind the "TSANet Connect" sidebar app in the Fin/Intercom Inbox.</description>
+
+  <properties>
+    <java.version>21</java.version>
+    <connect-library.version>0.0.1-SNAPSHOT</connect-library.version>
+  </properties>
+
+  <!--
+    Module boundary rule: runtime-core must not import com.tsanet.* (the Connect SDK).
+    The SDK dependency lives only in connect-gateway, which is included only under the
+    `sdk` profile so a fresh clone with an empty ~/.m2 builds green with plain `mvn verify`.
+    See docs/decisions.md (D6).
+  -->
+  <modules>
+    <module>runtime-core</module>
+  </modules>
+
+  <profiles>
+    <profile>
+      <id>sdk</id>
+      <modules>
+        <module>runtime-core</module>
+        <module>connect-gateway</module>
+      </modules>
+    </profile>
+  </profiles>
+</project>
