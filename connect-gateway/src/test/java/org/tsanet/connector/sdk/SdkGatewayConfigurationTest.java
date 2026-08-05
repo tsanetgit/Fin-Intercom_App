@@ -62,6 +62,33 @@ class SdkGatewayConfigurationTest {
     }
 
     @Test
+    void clientCredentialsModeRequiresEntraFields() {
+        // healthy() only LOGS auth failures, so a half-configured client_credentials
+        // deployment must be caught at startup, not at the first agent interaction.
+        runner.withPropertyValues(
+                "connector.tsanet.mode=sdk",
+                "connector.tsanet.sdk.api-base-url=https://stub.invalid",
+                "connector.tsanet.sdk.auth-mode=client_credentials",
+                "connector.tsanet.sdk.principal=client-id",
+                "connector.tsanet.sdk.secret=client-secret",
+                "connector.tsanet.sdk.sqlite-path=" + tmp.resolve("cc.db"))
+                .run(ctx -> {
+                    assertNotNull(ctx.getStartupFailure());
+                    assertTrue((String.valueOf(ctx.getStartupFailure()) + causeChain(ctx.getStartupFailure()))
+                            .contains("connector.tsanet.sdk.entra-tenant-id"));
+                });
+    }
+
+    @Test
+    void propertiesToStringMasksTheSecret() {
+        SdkGatewayConfiguration.SdkGatewayProperties props =
+                new SdkGatewayConfiguration.SdkGatewayProperties("https://stub.invalid", "password",
+                        "api@example.invalid", "hunter2-super-secret", null, null, "x.db", null, null, null);
+        assertTrue(props.toString().contains("secret=***"));
+        assertFalse(props.toString().contains("hunter2"));
+    }
+
+    @Test
     void fakeModeLeavesTheConfigurationInert() {
         runner.withPropertyValues("connector.tsanet.mode=fake").run(ctx -> {
             assertTrue(ctx.getStartupFailure() == null);

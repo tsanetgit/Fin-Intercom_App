@@ -55,6 +55,30 @@ class MemberSessionRegistryTest {
     }
 
     @Test
+    void changedEnvironmentRebuildsThePair() {
+        // A session is a pure function of (environment, credentials); repointing the
+        // base URL with unchanged credentials must not return a session aimed at the
+        // old target (QA round-3 note).
+        MemberSessionRegistry registry = new MemberSessionRegistry();
+        MemberSessionRegistry.TsanetCredentials credentials =
+                new MemberSessionRegistry.TsanetCredentials("password", "api@example.invalid", "s", null, null);
+        SdkTsanetGateway.Config config = new SdkTsanetGateway.Config("https://a.invalid", true, 1500, 4000);
+        SdkTsanetGateway first = registry.gatewayFor("w1", new MemberSessionRegistry.MemberBinding(
+                "https://a.invalid", tmp.resolve("env-a.db").toString(), credentials, config));
+        SdkTsanetGateway second = registry.gatewayFor("w1", new MemberSessionRegistry.MemberBinding(
+                "https://b.invalid", tmp.resolve("env-b.db").toString(), credentials, config));
+        assertNotSame(first, second);
+    }
+
+    @Test
+    void toStringNeverPrintsTheSecret() {
+        MemberSessionRegistry.MemberBinding binding = binding("hunter2-super-secret");
+        org.junit.jupiter.api.Assertions.assertFalse(binding.toString().contains("hunter2"),
+                "records render in logs and binding failures; the secret must be masked");
+        org.junit.jupiter.api.Assertions.assertFalse(binding.credentials().toString().contains("hunter2"));
+    }
+
+    @Test
     void invalidateForcesARebuild() {
         MemberSessionRegistry registry = new MemberSessionRegistry();
         MemberSessionRegistry.MemberBinding binding = binding("secret-1");

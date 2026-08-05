@@ -40,6 +40,15 @@ public class SdkGatewayConfiguration {
                 testSubmission = Boolean.TRUE;
             }
         }
+
+        /** Never prints the secret: Spring renders these in binding-failure messages. */
+        @Override
+        public String toString() {
+            return "SdkGatewayProperties[apiBaseUrl=" + apiBaseUrl + ", authMode=" + authMode
+                    + ", principal=" + principal + ", secret=***, entraTenantId=" + entraTenantId
+                    + ", entraAudience=" + entraAudience + ", sqlitePath=" + sqlitePath
+                    + ", testSubmission=" + testSubmission + "]";
+        }
     }
 
     @Bean(destroyMethod = "")
@@ -54,6 +63,12 @@ public class SdkGatewayConfiguration {
         require(props.principal(), "connector.tsanet.sdk.principal");
         require(props.secret(), "connector.tsanet.sdk.secret");
         require(props.sqlitePath(), "connector.tsanet.sdk.sqlite-path");
+        if ("client_credentials".equalsIgnoreCase(props.authMode())) {
+            // The mode most likely to be half-configured when the pilot moves off
+            // password auth; healthy() only LOGS failures, so catch it at startup.
+            require(props.entraTenantId(), "connector.tsanet.sdk.entra-tenant-id");
+            require(props.entraAudience(), "connector.tsanet.sdk.entra-audience");
+        }
         Path sqliteParent = Path.of(props.sqlitePath()).toAbsolutePath().normalize().getParent();
         if (sqliteParent != null && !Files.isDirectory(sqliteParent) ) {
             try {

@@ -351,6 +351,23 @@ class SdkTsanetGatewayTest {
     }
 
     @Test
+    void formFetchFailureDuringSubmitIsAReadFailureNotAmbiguous() {
+        // The re-fetch is a READ inside the submit budget: its 5xx parks nothing,
+        // because no create was attempted (QA round-3 note - manufacturing ambiguity
+        // pushes traffic down the reconcile path for a plain read failure).
+        forms.onFetch = () -> {
+            throw HttpServerErrorException.create(HttpStatus.INTERNAL_SERVER_ERROR, "boom",
+                    HttpHeaders.EMPTY, new byte[0], null);
+        };
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        GatewayException e = assertThrows(GatewayException.class,
+                () -> gateway.submit(draft("case-ff", Map.of())));
+        assertFalse(e instanceof GatewayTimeoutException,
+                "a form-fetch failure is definitive for the submit that never happened");
+        assertTrue(collaborations.lastCreate.get() == null);
+    }
+
+    @Test
     void malformedDocumentIdIsDefinitiveNotAmbiguous() {
         // No network call is ever attempted for a bad id, so it must NOT park the
         // flow UNRESOLVED (gate finding: a phantom-duplicate risk for a create that

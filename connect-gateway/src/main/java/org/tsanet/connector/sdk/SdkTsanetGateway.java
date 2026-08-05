@@ -237,8 +237,15 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         CollaborationRequestStatusDTO created = bounded("submit", config.submitDeadlineMillis(), () -> {
             // Re-fetched fresh by documentId, exactly like the SDK facade does: the
             // form IS the create request body, and staleness belongs to the server's
-            // validation, not to a cache here. Both round trips share the 4000ms budget.
-            CollaborationRequestDTO form = forms.getFormByDocumentId(documentId);
+            // validation, not to a cache here. Both round trips share the 4000ms budget,
+            // but only the CREATE carries submit's ambiguity: a failure on this read
+            // parks nothing, because no create was attempted (QA round-3 note).
+            CollaborationRequestDTO form;
+            try {
+                form = forms.getFormByDocumentId(documentId);
+            } catch (RuntimeException e) {
+                throw sanitize("form", e);
+            }
             applyDraft(form, draft);
             return collaborations.createCollaborationRequest(form);
         });
@@ -407,7 +414,12 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         }
     }
 
-    /** One auth-recovery retry on 401; anything else propagates to the sanitizer. */
+    /**
+     * One auth-recovery retry on 401; anything else propagates to the sanitizer.
+     * For submit this re-runs the whole callable including the create — deliberate,
+     * resting on the same assumption REJECTED_BEFORE_CREATE encodes: a 401 means auth
+     * was rejected in front of the API, so nothing was created by the first attempt.
+     */
     private <T> T callOnce(Callable<T> call) throws Exception {
         try {
             return call.call();
@@ -434,6 +446,13 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
             if (submit && !REJECTED_BEFORE_CREATE.contains(status)) {
                 return new GatewayTimeoutException(
                         "Connect API returned HTTP " + status + " (submit); outcome unknown");
+            }
+            if (submit && (status == 400 || status == 422)) {
+                // A validation rejection can mean the partner changed the form after
+                // it was loaded; "fix and resubmit" over a stale canvas cannot fix it.
+                return new GatewayException("Connect API rejected the request (HTTP " + status
+                        + ", submit); if the partner's form changed since it was loaded,"
+                        + " reselect the partner and retry");
             }
             return new GatewayException("Connect API rejected the request (HTTP " + status + ", " + op + ")");
         }

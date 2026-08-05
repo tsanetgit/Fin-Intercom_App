@@ -53,11 +53,26 @@ public final class MemberSessionRegistry {
             }
             return new PasswordAuthConfig(principal, secret);
         }
+
+        /** Never prints the secret: records auto-generate toString, and Spring binding
+         * failures / actuator dumps render component values (QA round-3 note). */
+        @Override
+        public String toString() {
+            return "TsanetCredentials[mode=" + mode + ", principal=" + principal
+                    + ", secret=***, entraTenantId=" + entraTenantId
+                    + ", entraAudience=" + entraAudience + "]";
+        }
     }
 
     /** Everything needed to build one member's session + gateway. */
     public record MemberBinding(String apiBaseUrl, String sqlitePath, TsanetCredentials credentials,
             SdkTsanetGateway.Config gatewayConfig) {
+
+        @Override
+        public String toString() {
+            return "MemberBinding[apiBaseUrl=" + apiBaseUrl + ", sqlitePath=" + sqlitePath
+                    + ", credentials=" + credentials + "]"; // credentials masks its secret
+        }
     }
 
     private record Holder(TsaNetApiSession session, SdkTsanetGateway gateway, String fingerprint) {
@@ -72,7 +87,7 @@ public final class MemberSessionRegistry {
      * session per key even though construction is the expensive side.
      */
     public SdkTsanetGateway gatewayFor(String memberKey, MemberBinding binding) {
-        String fingerprint = fingerprint(binding.credentials());
+        String fingerprint = fingerprint(binding);
         return members.compute(memberKey, (key, existing) -> {
             if (existing != null && existing.fingerprint().equals(fingerprint)) {
                 return existing;
@@ -102,12 +117,21 @@ public final class MemberSessionRegistry {
         }
     }
 
-    /** Hashed so the cache key never holds a second plaintext copy of the secret. */
-    private static String fingerprint(TsanetCredentials credentials) {
+    /**
+     * Hashed so the cache key never holds a second plaintext copy of the secret. The
+     * ENVIRONMENT is part of the fingerprint, not just the credentials: a session is a
+     * pure function of (environment, credentials), so repointing api-base-url or
+     * rotating the Entra tenant with an unchanged secret must rebuild rather than
+     * return a cached session aimed at the old target (QA round-3 note).
+     */
+    private static String fingerprint(MemberBinding binding) {
+        TsanetCredentials credentials = binding.credentials();
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             for (String part : new String[] {
-                    credentials.mode(), credentials.principal(), credentials.secret() }) {
+                    credentials.mode(), credentials.principal(), credentials.secret(),
+                    credentials.entraTenantId(), credentials.entraAudience(),
+                    binding.apiBaseUrl(), binding.sqlitePath() }) {
                 digest.update((part == null ? "" : part).getBytes(StandardCharsets.UTF_8));
                 digest.update((byte) 0);
             }
