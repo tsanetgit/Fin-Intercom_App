@@ -1,0 +1,10 @@
+server:
+  port: 8792
+
+connector:
+  # Empty secrets fail closed (401) on the signed endpoints; /healthz stays open.
+  intercom-client-secret: ${INTERCOM_DEV_CLIENT_SECRET:}
+  tsanet-webhook-secret: ${TSANET_WEBHOOK_SECRET:${TSANET_BETA_WEBHOOK_SECRET:}}
+  max-body-bytes: 1048576
+  dedupe-capacity: 10000
+  queue-capacity: 10000
