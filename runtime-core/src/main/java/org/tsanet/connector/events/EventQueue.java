@@ -7,6 +7,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.stereotype.Component;
 import org.tsanet.connector.config.ConnectorProperties;
 
@@ -19,7 +20,7 @@ import org.tsanet.connector.config.ConnectorProperties;
  * reconciliation poller remains the source of truth regardless (D4).
  */
 @Component
-public class EventQueue {
+public class EventQueue implements SmartInitializingSingleton {
 
     private static final Logger log = LoggerFactory.getLogger(EventQueue.class);
 
@@ -64,11 +65,22 @@ public class EventQueue {
         drain.start();
     }
 
+    /** All singletons exist here, so resolving cannot re-enter bean creation. */
+    @Override
+    public void afterSingletonsInstantiated() {
+        handlers = handlerProvider.orderedStream().toList();
+    }
+
     private void dispatch(InboundEvent e) {
         List<InboundEventHandler> resolved = handlers;
         if (resolved == null) {
+            // Non-Spring construction (tests): resolve lazily, but never cache an
+            // empty answer — a transiently-empty provider must not silence handlers
+            // forever (QA round-2).
             resolved = handlerProvider.orderedStream().toList();
-            handlers = resolved;
+            if (!resolved.isEmpty()) {
+                handlers = resolved;
+            }
         }
         for (InboundEventHandler handler : resolved) {
             if (handler.handles(e)) {

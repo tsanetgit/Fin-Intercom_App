@@ -121,7 +121,7 @@ class AnnotationFlowTest {
         SubmissionLink link = links.byInternalCaseNumber(flow).orElseThrow();
         assertEquals("777222", link.conversationId());
         assertTrue(link.ticketId() == null, "conversation surface has no ticket anchor");
-        assertEquals(link, links.byConversationId("777222").orElseThrow(),
+        assertEquals(link, links.byConversationId("777222").get(0),
                 "inbound-from-Intercom routing must find the link by conversation");
     }
 }

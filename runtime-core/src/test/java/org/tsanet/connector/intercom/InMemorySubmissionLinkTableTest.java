@@ -19,7 +19,7 @@ class InMemorySubmissionLinkTableTest {
         table.record(link("TSA-1", "flow-1", "conv-1"));
         assertEquals("TSA-1", table.byToken("TSA-1").orElseThrow().token());
         assertEquals("TSA-1", table.byInternalCaseNumber("flow-1").orElseThrow().token());
-        assertEquals("TSA-1", table.byConversationId("conv-1").orElseThrow().token(),
+        assertEquals("TSA-1", table.byConversationId("conv-1").get(0).token(),
                 "Phase-2 inbound-from-Intercom routes by conversation id");
     }
 
@@ -34,6 +34,19 @@ class InMemorySubmissionLinkTableTest {
                 "a replayed record must not overwrite the original link");
         assertEquals(AnnotationState.FULL, table.annotationState("TSA-2"),
                 "a replayed record must not reset annotation progress");
+    }
+
+    @Test
+    void oneConversationCanAnchorSeveralCasesNewestFirst() {
+        // QA round-2: putIfAbsent modeled this one-to-one, so the first case owned
+        // the conversation forever and later cases were unroutable from Intercom.
+        InMemorySubmissionLinkTable table = new InMemorySubmissionLinkTable();
+        table.record(link("TSA-a", "flow-a", "conv-shared"));
+        table.record(link("TSA-b", "flow-b", "conv-shared"));
+        var found = table.byConversationId("conv-shared");
+        assertEquals(2, found.size());
+        assertEquals("TSA-b", found.get(0).token(), "newest first");
+        assertEquals("TSA-a", found.get(1).token());
     }
 
     @Test

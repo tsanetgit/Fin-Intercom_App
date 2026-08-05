@@ -292,12 +292,9 @@ public class CanvasController {
         if (renderedUnderLock != null) {
             return renderedUnderLock;
         }
+        SubmissionResult result;
         try {
-            SubmissionResult result = gateway.submit(draft);
-            if (state.landed(result)) {
-                recordLanded(state, payload);
-            }
-            return confirmation(state);
+            result = gateway.submit(draft);
         } catch (GatewayTimeoutException e) {
             // If a concurrent lookup landed the flow first, this renders one stale
             // pending canvas; the next click self-corrects via renderByStatus.
@@ -318,6 +315,12 @@ public class CanvasController {
             state.submitUnresolved();
             return pendingCanvas(state);
         }
+        // The case landed; bookkeeping runs OUTSIDE the gateway try so its failures
+        // can never masquerade as gateway faults or park a landed flow (QA round-2).
+        if (state.landed(result)) {
+            recordLandedSafely(state, payload);
+        }
+        return confirmation(state);
     }
 
     private Map<String, Object> pendingCanvas(OutboundFlowState state) {
@@ -357,7 +360,7 @@ public class CanvasController {
             return gateway.findSubmission(state.flowId())
                     .map(result -> {
                         if (state.landed(result)) {
-                            recordLanded(state, payload);
+                            recordLandedSafely(state, payload);
                         }
                         return confirmation(state);
                     })
@@ -432,6 +435,24 @@ public class CanvasController {
      * annotation - which runs on the event drain, never inside this canvas response
      * (D2 budget). No case content in the audit line or the link (D10).
      */
+    /**
+     * A bookkeeping failure must cost exactly the bookkeeping, audited — never the
+     * agent's confirmation (the case DID land), never a fake gateway fault, and never
+     * a silent hole in the manual re-drive path. landed()'s first-transition flag is
+     * already consumed here, so this is the one shot: the audit line is the recovery
+     * key when it misses.
+     */
+    private void recordLandedSafely(OutboundFlowState state, Map<String, Object> payload) {
+        try {
+            recordLanded(state, payload);
+        } catch (RuntimeException e) {
+            SubmissionResult result = state.result();
+            log.error("tsanet_audit event=link_bookkeeping_failed token={} flow={} ticket={}",
+                    result == null ? null : result.token(), state.flowId(),
+                    nestedId(payload.get("ticket")), e);
+        }
+    }
+
     private void recordLanded(OutboundFlowState state, Map<String, Object> payload) {
         SubmissionResult result = state.result();
         PartnerHit partner = state.partner();

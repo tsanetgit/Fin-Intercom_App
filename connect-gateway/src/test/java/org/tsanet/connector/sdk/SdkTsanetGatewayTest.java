@@ -487,6 +487,43 @@ class SdkTsanetGatewayTest {
     }
 
     @Test
+    void findSubmissionRejectsATokenlessRow() {
+        // QA round-2: submit treats a token-less 200 as ambiguous per D3, but the
+        // reconcile read had no such guard — a matching row with a null token NPE'd
+        // the handler and poisoned the flow LANDED-with-null. A row that cannot
+        // supply the token is not a landing: explicit failure, never not-found (a
+        // case may exist) and never a null-token result.
+        collaborations.onList = () -> List.of(status("case-nt", null, true));
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        GatewayException e = assertThrows(GatewayException.class, () -> gateway.findSubmission("case-nt"));
+        assertFalse(e instanceof GatewayTimeoutException);
+        assertTrue(e.getMessage().contains("without a token"));
+    }
+
+    @Test
+    void problemDetailStripsUnicodeControlsAndMarkdown() {
+        forms.onFetch = () -> formWithField(88);
+        collaborations.onCreate = form -> {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Content-Type", "application/problem+json");
+            String body = "{\"detail\":\"Rejected\\u202e\\u200b\\u2028 [click me](https://evil.invalid)"
+                    + " `code` field\"}";
+            throw HttpClientErrorException.create(HttpStatus.UNPROCESSABLE_ENTITY, "bad",
+                    headers, body.getBytes(StandardCharsets.UTF_8), null);
+        };
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        GatewayException e = assertThrows(GatewayException.class,
+                () -> gateway.submit(draft("case-uni", Map.of("88", "SN"))));
+        String message = e.getMessage();
+        assertFalse(message.contains("\u202e"), "RTL override must be stripped");
+        assertFalse(message.contains("\u200b"), "zero-width space must be stripped");
+        assertFalse(message.contains("\u2028"), "line separator must be stripped");
+        assertFalse(message.contains("[") || message.contains("`"),
+                "markdown-active characters are neutralized pending the live render check");
+        assertTrue(message.contains("(click me)(https://evil.invalid)"));
+    }
+
+    @Test
     void findSubmissionMapsTheSingleMatch() {
         collaborations.onList = () -> List.of(status("case-9", "TSA-C", true));
         SdkTsanetGateway gateway = gateway(1500, 4000);

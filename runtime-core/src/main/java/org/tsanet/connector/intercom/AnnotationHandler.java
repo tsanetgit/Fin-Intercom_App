@@ -112,6 +112,11 @@ public class AnnotationHandler implements InboundEventHandler {
 
     @PreDestroy
     void stop() {
-        scheduler.shutdownNow();
+        int dropped = scheduler.shutdownNow().size();
+        if (dropped > 0) {
+            // Token-level identity is in the preceding annotation_retry lines; this
+            // makes the loss itself visible instead of reading as still in flight.
+            log.warn("tsanet_audit event=annotation_retries_dropped count={} reason=shutdown", dropped);
+        }
     }
 }

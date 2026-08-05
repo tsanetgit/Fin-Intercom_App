@@ -83,14 +83,22 @@ public class RestIntercomGateway implements IntercomGateway {
         attrs.put(ATTR_TOKEN, link.token());
         attrs.put(ATTR_PARTNER, link.partnerDisplay());
         Long respondByEpoch = toEpochSeconds(link.respondBy());
+        boolean parseDropped = link.respondBy() != null && !link.respondBy().isBlank()
+                && respondByEpoch == null;
         if (respondByEpoch != null) {
             attrs.put(ATTR_RESPOND_BY, respondByEpoch);
         }
         try {
             put(link.ticketId(), attrs);
-            // No respond-by on the case (or unparseable) means nothing applicable was
-            // dropped: that is FULL, not DEGRADED — degradation is strictly a write
-            // that had to shed a field to get through.
+            if (parseDropped) {
+                // A respond-by the case CARRIES but we could not parse is the
+                // wire-format-changed signal DEGRADED exists for — same outcome and
+                // same audit line whether the drop happened client- or server-side.
+                log.warn("tsanet_audit event=annotation_degraded ticket={} dropped={} reason=unparseable",
+                        link.ticketId(), ATTR_RESPOND_BY);
+                return AnnotationOutcome.DEGRADED;
+            }
+            // ABSENT respond-by means nothing applicable was dropped: FULL.
             return AnnotationOutcome.FULL;
         } catch (HttpClientErrorException rejected) {
             if (respondByEpoch == null) {

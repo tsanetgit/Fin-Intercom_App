@@ -1,5 +1,6 @@
 package org.tsanet.connector.intercom;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -18,8 +19,12 @@ public interface SubmissionLinkTable {
 
     Optional<SubmissionLink> byInternalCaseNumber(String internalCaseNumber);
 
-    /** Inbound-from-Intercom routing (Phase 2): events arrive keyed by conversation. */
-    Optional<SubmissionLink> byConversationId(String conversationId);
+    /**
+     * Inbound-from-Intercom routing (Phase 2): events arrive keyed by conversation,
+     * and one conversation can legitimately anchor several cases over its life —
+     * newest first, so the common single-case lookup is get(0).
+     */
+    List<SubmissionLink> byConversationId(String conversationId);
 
     AnnotationState annotationState(String token);
 

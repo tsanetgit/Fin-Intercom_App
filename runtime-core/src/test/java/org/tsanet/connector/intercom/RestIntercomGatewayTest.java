@@ -1,0 +1,132 @@
+package org.tsanet.connector.intercom;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+
+import java.time.Instant;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.RestTemplate;
+
+/**
+ * Wire-level probes for the annotation writes, against the exact shapes the spike
+ * verified: attributes keyed by NAME, datetime as epoch seconds, D3 read-back, the
+ * degraded retry that drops only "Respond By", and the parse-failure path that must
+ * report DEGRADED (the wire-format-changed signal), never FULL.
+ */
+class RestIntercomGatewayTest {
+
+    private static final String BASE = "https://intercom.test";
+
+    private final RestTemplate http = new RestTemplate();
+    private final MockRestServiceServer server = MockRestServiceServer.bindTo(http).build();
+    private final RestIntercomGateway gateway = new RestIntercomGateway(http, BASE, "admin-1");
+
+    private static SubmissionLink link(String respondBy) {
+        return new SubmissionLink("TSA-9", "flow-9", "w1", "conv-9", "ticket-9", "Partner & Co",
+                respondBy, true, "agent@tsanet.org", Instant.parse("2026-08-05T20:00:00Z"));
+    }
+
+    private void expectReadBack(String tokenOnTicket) {
+        server.expect(requestTo(BASE + "/tickets/ticket-9"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"ticket_attributes\":{\"TSANet Token\":\""
+                        + tokenOnTicket + "\"}}", MediaType.APPLICATION_JSON));
+    }
+
+    private void expectNote() {
+        server.expect(requestTo(BASE + "/tickets/ticket-9/reply"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess("{\"id\":\"note-1\"}", MediaType.APPLICATION_JSON));
+    }
+
+    @Test
+    void fullAnnotationWritesEpochSecondsAndReadsBack() {
+        server.expect(requestTo(BASE + "/tickets/ticket-9"))
+                .andExpect(method(HttpMethod.PUT))
+                .andExpect(content().json("{\"ticket_attributes\":{\"TSANet Token\":\"TSA-9\","
+                        + "\"Partner\":\"Partner & Co\",\"Respond By\":1786033600}}"))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        expectReadBack("TSA-9");
+        expectNote();
+        assertEquals(IntercomGateway.AnnotationOutcome.FULL,
+                gateway.annotate(link("2026-08-06T16:26:40Z")));
+        server.verify();
+    }
+
+    @Test
+    void absentRespondByIsFullButUnparseableIsDegraded() {
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        expectReadBack("TSA-9");
+        expectNote();
+        assertEquals(IntercomGateway.AnnotationOutcome.FULL, gateway.annotate(link(null)),
+                "nothing applicable was dropped: FULL");
+
+        server.reset();
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        expectReadBack("TSA-9");
+        expectNote();
+        assertEquals(IntercomGateway.AnnotationOutcome.DEGRADED,
+                gateway.annotate(link("tomorrow-ish")),
+                "a respond-by the case CARRIES but we cannot parse is the format signal");
+    }
+
+    @Test
+    void rejectedFullWriteRetriesWithoutRespondByAsDegraded() {
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY));
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andExpect(content().json("{\"ticket_attributes\":{\"TSANet Token\":\"TSA-9\","
+                        + "\"Partner\":\"Partner & Co\"}}", true))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        expectReadBack("TSA-9");
+        expectNote();
+        assertEquals(IntercomGateway.AnnotationOutcome.DEGRADED,
+                gateway.annotate(link("2026-08-06T16:26:40Z")));
+        server.verify();
+    }
+
+    @Test
+    void readBackMismatchThrowsWithTheRenameHint() {
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        expectReadBack("SOMETHING-ELSE");
+        IntercomException e = assertThrows(IntercomException.class,
+                () -> gateway.annotate(link(null)));
+        assertTrue(e.getMessage().contains("did not read back"),
+                "D3: a 200 write that does not read back is not done");
+    }
+
+    @Test
+    void conversationAnchoredLinkGetsTheNoteOnly() {
+        server.expect(requestTo(BASE + "/conversations/conv-9/reply"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess("{\"id\":\"note-2\"}", MediaType.APPLICATION_JSON));
+        SubmissionLink conversationOnly = new SubmissionLink("TSA-9", "flow-9", "w1", "conv-9",
+                null, "Partner & Co", null, true, "agent@tsanet.org",
+                Instant.parse("2026-08-05T20:00:00Z"));
+        assertEquals(IntercomGateway.AnnotationOutcome.FULL, gateway.annotate(conversationOnly));
+        server.verify();
+    }
+
+    @Test
+    void noteHtmlEscapesPartnerAuthoredText() {
+        String html = RestIntercomGateway.noteHtml(new SubmissionLink("TSA-9", "flow-9", "w1",
+                "conv-9", "ticket-9", "<script>alert('x')</script> & Co", null, false,
+                "agent@tsanet.org", Instant.parse("2026-08-05T20:00:00Z")));
+        assertTrue(html.contains("&lt;script&gt;"));
+        assertTrue(html.contains("&amp; Co"));
+        assertTrue(!html.contains("<script>"));
+    }
+}

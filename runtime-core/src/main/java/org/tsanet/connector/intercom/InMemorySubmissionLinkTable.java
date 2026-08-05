@@ -1,7 +1,9 @@
 package org.tsanet.connector.intercom;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
@@ -20,7 +22,9 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
 
     private final Map<String, Entry> byToken = new ConcurrentHashMap<>();
     private final Map<String, String> tokenByInternal = new ConcurrentHashMap<>();
-    private final Map<String, String> tokenByConversation = new ConcurrentHashMap<>();
+    // One conversation can anchor several cases over its life (QA round-2): the
+    // index is multi-valued, newest first.
+    private final Map<String, CopyOnWriteArrayList<String>> tokensByConversation = new ConcurrentHashMap<>();
 
     @Override
     public void record(SubmissionLink link) {
@@ -31,7 +35,8 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
         }
         tokenByInternal.putIfAbsent(link.internalCaseNumber(), link.token());
         if (link.conversationId() != null) {
-            tokenByConversation.putIfAbsent(link.conversationId(), link.token());
+            tokensByConversation.computeIfAbsent(link.conversationId(), c -> new CopyOnWriteArrayList<>())
+                    .add(0, link.token());
         }
         int size = byToken.size();
         if (size > SIZE_WARN_THRESHOLD && size % 1_000 == 0) {
@@ -51,8 +56,12 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
     }
 
     @Override
-    public Optional<SubmissionLink> byConversationId(String conversationId) {
-        return Optional.ofNullable(tokenByConversation.get(conversationId)).flatMap(this::byToken);
+    public List<SubmissionLink> byConversationId(String conversationId) {
+        CopyOnWriteArrayList<String> tokens = tokensByConversation.get(conversationId);
+        if (tokens == null) {
+            return List.of();
+        }
+        return tokens.stream().map(this::byToken).flatMap(Optional::stream).toList();
     }
 
     @Override
