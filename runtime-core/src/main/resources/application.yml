@@ -2,6 +2,10 @@ server:
   port: 8792
 
 connector:
+  # fake = fixture gateway (dev/test); sdk = Connect SDK gateway (slice 2). The fake
+  # refuses to start under the prod profile.
+  tsanet:
+    mode: fake
   # Empty secrets fail closed (401) on the signed endpoints; /healthz stays open.
   intercom-client-secret: ${INTERCOM_DEV_CLIENT_SECRET:}
   tsanet-webhook-secret: ${TSANET_WEBHOOK_SECRET:${TSANET_BETA_WEBHOOK_SECRET:}}

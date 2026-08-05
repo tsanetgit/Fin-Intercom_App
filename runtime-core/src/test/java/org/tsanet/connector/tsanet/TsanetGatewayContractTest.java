@@ -1,0 +1,97 @@
+package org.tsanet.connector.tsanet;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.tsanet.connector.tsanet.dto.PartnerHit;
+import org.tsanet.connector.tsanet.dto.ProcessForm;
+import org.tsanet.connector.tsanet.dto.SubmissionDraft;
+import org.tsanet.connector.tsanet.dto.SubmissionResult;
+
+/**
+ * The gateway contract both implementations must pass: FakeTsanetGateway now, the
+ * SDK-backed gateway in slice 2 (against BETA with the sdk test members). Subclasses
+ * provide the instance and the environment-appropriate inputs; the semantics asserted
+ * here are the ones the canvas flow depends on.
+ */
+public abstract class TsanetGatewayContractTest {
+
+    protected abstract TsanetGateway gateway();
+
+    /** A query guaranteed to match at least one partner in the environment under test. */
+    protected String knownPartnerQuery() {
+        return "netapp";
+    }
+
+    /** Whether this implementation supports the injected submit-timeout scenario. */
+    protected boolean supportsInjectedSubmitTimeout() {
+        return true;
+    }
+
+    protected SubmissionDraft draft(String internalCaseNumber, String documentId, String summary) {
+        return new SubmissionDraft(internalCaseNumber, documentId, summary,
+                "Contract test description", Map.of(), "Contract Tester", "tester@tsanet.org");
+    }
+
+    @Test
+    void searchReturnsPopulatedHits() {
+        List<PartnerHit> hits = gateway().searchPartners(knownPartnerQuery());
+        assertFalse(hits.isEmpty(), "known query must match");
+        PartnerHit first = hits.get(0);
+        assertNotNull(first.companyId());
+        assertNotNull(first.companyName());
+        assertFalse(first.display().isBlank());
+    }
+
+    @Test
+    void formCarriesDocumentIdAndFieldMetadata() {
+        PartnerHit partner = gateway().searchPartners(knownPartnerQuery()).get(0);
+        ProcessForm form = gateway().form(partner);
+        assertNotNull(form.documentId(), "documentId is required for submission");
+        assertNotNull(form.fields());
+        form.fields().forEach(f -> {
+            assertNotNull(f.fieldId());
+            assertNotNull(f.label());
+            assertNotNull(f.type());
+        });
+    }
+
+    @Test
+    void submitReturnsTokenAndIsFindableByInternalCaseNumber() {
+        PartnerHit partner = gateway().searchPartners(knownPartnerQuery()).get(0);
+        ProcessForm form = gateway().form(partner);
+        String internal = "contract-" + UUID.randomUUID();
+        SubmissionResult result = gateway().submit(draft(internal, form.documentId(), "Contract test case"));
+        assertNotNull(result.token());
+        Optional<SubmissionResult> found = gateway().findSubmission(internal);
+        assertTrue(found.isPresent(), "submission must be findable by internalCaseNumber");
+        assertEquals(result.token(), found.get().token());
+    }
+
+    @Test
+    void unknownInternalCaseNumberFindsNothing() {
+        assertTrue(gateway().findSubmission("contract-never-" + UUID.randomUUID()).isEmpty());
+    }
+
+    @Test
+    void timedOutSubmitIsStillReconcilableByLookup() {
+        if (!supportsInjectedSubmitTimeout()) {
+            return;
+        }
+        PartnerHit partner = gateway().searchPartners(knownPartnerQuery()).get(0);
+        ProcessForm form = gateway().form(partner);
+        String internal = "contract-timeout-" + UUID.randomUUID();
+        assertThrows(GatewayTimeoutException.class,
+                () -> gateway().submit(draft(internal, form.documentId(), "please timeout")));
+        assertTrue(gateway().findSubmission(internal).isPresent(),
+                "a client-side timeout may still have created the case; lookup must see it");
+    }
+}
