@@ -15,8 +15,11 @@ import org.tsanet.connector.config.ConnectorProperties;
 
 /**
  * One parameterized verifier for all three inbound signature schemes
- * (docs/decisions.md D1). Everything except /healthz requires a valid signature;
- * missing or unconfigured secrets fail closed.
+ * (docs/decisions.md D1). Default-deny: /healthz is the only open route, requests
+ * matching a scheme are verified, and anything else is rejected 401, so an encoded or
+ * parameterized path that dodges the prefix match gets rejected rather than passed
+ * through. Matching uses a decoded, semicolon-stripped path so the 401-vs-verify split
+ * mirrors what the container routes. Missing or unconfigured secrets fail closed.
  */
 @Component
 public class SignatureVerificationFilter extends OncePerRequestFilter {
@@ -44,12 +47,25 @@ public class SignatureVerificationFilter extends OncePerRequestFilter {
         this.properties = properties;
     }
 
+    /** The only unauthenticated paths (exact match on the normalized path). */
+    private static final List<String> OPEN = List.of("/healthz");
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws IOException, jakarta.servlet.ServletException {
-        Scheme scheme = match(request.getRequestURI());
-        if (scheme == null) {
+        String path = normalizedPath(request);
+        if (path == null) {
+            reject(response, HttpServletResponse.SC_UNAUTHORIZED, "unroutable_path");
+            return;
+        }
+        if (OPEN.contains(path)) {
             chain.doFilter(request, response);
+            return;
+        }
+        Scheme scheme = match(path);
+        if (scheme == null) {
+            log.warn("rejecting {}: no signature scheme for path (default-deny)", path);
+            reject(response, HttpServletResponse.SC_UNAUTHORIZED, "unauthenticated_path");
             return;
         }
         byte[] body = request.getInputStream().readNBytes(properties.maxBodyBytes() + 1);
@@ -79,6 +95,29 @@ public class SignatureVerificationFilter extends OncePerRequestFilter {
             }
         }
         return null;
+    }
+
+    /**
+     * Context-path-stripped, semicolon-param-stripped, single-decoded, slash-collapsed
+     * path; null when undecodable. Single decode matches container behavior, and
+     * default-deny covers anything that still looks unusual afterwards.
+     */
+    private static String normalizedPath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        if (uri == null) {
+            return null;
+        }
+        String context = request.getContextPath();
+        if (context != null && !context.isEmpty() && uri.startsWith(context)) {
+            uri = uri.substring(context.length());
+        }
+        uri = uri.replaceAll(";[^/]*", "");
+        try {
+            uri = java.net.URLDecoder.decode(uri, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException undecodable) {
+            return null;
+        }
+        return uri.replaceAll("/{2,}", "/");
     }
 
     private static boolean verify(Scheme scheme, String secret, byte[] body, String provided) {

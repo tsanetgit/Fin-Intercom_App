@@ -13,8 +13,14 @@ this file records the why and the measured numbers.
 | `/webhooks/intercom` | `X-Hub-Signature` | HMAC-SHA1 (same client secret) | `sha1=<hex>` | byte-verified live 2026-08-04 |
 | `/webhooks/tsanet` | `x-hub-signature-256` | HMAC-SHA256 (TSANet webhook secret) | `sha256=<hex>` assumed; verifier accepts optional prefix | **confirm byte-exact against the first live TSANet delivery in Phase 2** |
 
-All comparisons are constant-time (`MessageDigest.isEqual`). `/healthz` is the only
-unauthenticated route. Missing/empty secrets fail closed (401), never open.
+All comparisons are constant-time (`MessageDigest.isEqual`), case-insensitive on the
+hex. `/healthz` is the only unauthenticated route, and the filter is **default-deny**:
+a path matching no scheme is rejected 401 rather than passed through, so encoded or
+parameterized path spellings (`/%63anvas/...`, `/canvas;x=y/...`) cannot reach a
+controller unsigned, and any future route is signed-or-rejected by default. Matching
+runs on a decoded, semicolon-stripped path; bypass probes run against a real container
+in CI because MockMvc does not reproduce Tomcat's decode-before-mapping. Missing/empty
+secrets fail closed (401), never open.
 
 ## D2. Canvas latency budget: <2s, structurally enforced
 
