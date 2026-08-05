@@ -2,10 +2,23 @@ server:
   port: 8792
 
 connector:
-  # fake = fixture gateway (dev/test); sdk = Connect SDK gateway (slice 2). The fake
-  # refuses to start under the prod profile.
+  # fake = fixture gateway (dev/test); sdk = Connect SDK gateway (needs the
+  # connect-gateway module on the classpath). The fake refuses to start under the prod
+  # profile, and sdk mode refuses to start half-configured. The sdk block binds only
+  # when mode=sdk; empty values otherwise stay inert.
   tsanet:
     mode: fake
+    sdk:
+      api-base-url: ${TSANET_API_URL:}
+      auth-mode: ${TSANET_AUTH_MODE:password}   # password | client_credentials
+      principal: ${TSANET_API_USER:}            # username/email, or Entra client id
+      secret: ${TSANET_API_PASSWORD:}           # password, or Entra client secret
+      entra-tenant-id: ${TSANET_ENTRA_TENANT_ID:}
+      entra-audience: ${TSANET_ENTRA_AUDIENCE:}
+      sqlite-path: ${TSANET_SDK_SQLITE_PATH:data/connect-sdk.db}
+      # test-submission defaults TRUE: real partner cases are a per-deployment opt-in
+      # at pilot time (the upstream facade hardcodes true - connect-sdk-demo#6).
+      test-submission: ${TSANET_TEST_SUBMISSION:true}
   # Empty secrets fail closed (401) on the signed endpoints; /healthz stays open.
   intercom-client-secret: ${INTERCOM_DEV_CLIENT_SECRET:}
   tsanet-webhook-secret: ${TSANET_WEBHOOK_SECRET:${TSANET_BETA_WEBHOOK_SECRET:}}

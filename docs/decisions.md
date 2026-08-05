@@ -123,3 +123,40 @@ prod profile. Component shapes for input/textarea/single-select follow the Canva
 reference and get re-verified on a live workspace render before slice 1 is called
 done; `input_values` parsing is likewise asserted live (our spike canvases had no
 inputs, so those payload keys are documented-but-not-yet-observed).
+
+## D9. SDK gateway: generated client, per-member pairing, bounded and sanitized
+
+The slice-2 `SdkTsanetGateway` consumes the Connect SDK's **public generated client**
+(`com.tsanet.api.generated.*`) rather than its facades, because the facade layer cannot
+honor the gateway contract: its DTOs drop `respondBy`/`testCase` (connect-sdk-demo#7),
+`createRequest` hardcodes `testSubmission=true` (#6) and cannot set
+`submitterContactDetails`, the thin form template drops `adminNote`/
+`escalationInstructions`, and nothing exposes the `internalCaseNumber` list filter that
+findSubmission stands on. The SDK stays verbatim (D6); both gaps remain upstream.
+
+Mechanics, each pinned by a unit probe:
+- **Per-member (session + gateway + ApiClient) pairing** in MemberSessionRegistry
+  (SHA-256 credential fingerprint, rebuild-on-change — the demo's EnvironmentService
+  pattern). ApiClient is stateful; sharing one across members would bleed credentials.
+- **Bearer per request** via interceptor (never per-call client mutation, which races);
+  OAuth pre-refreshes on a 30s expiry skew, password mode has no known expiry and
+  relies on the one-shot 401 re-auth retry.
+- **Deadlines**: every op runs under future.get(1500ms reads / 4000ms submit) on
+  virtual threads; expiry throws GatewayTimeoutException and bumps a per-op counter
+  (structured log key `tsanet_gateway_timeout`, D2's counter).
+- **Sanitization at this boundary**: agent-visible messages carry op + HTTP status at
+  most, never URLs or response bodies; SDK validation strings pass through verbatim.
+  On submit, ONLY parsed 400/401/403/404/422 map to plain GatewayException
+  (definitively rejected before create); 5xx, transport faults, token-less 200s (D3)
+  and unmapped exceptions surface as GatewayTimeoutException = ambiguous, parking the
+  flow UNRESOLVED per the TsanetGateway.submit contract.
+- **findSubmission trusts nothing**: rows must actually match `submitterCaseNumber`
+  (an ignored server filter reads as not-found, never a false match), and >1 match —
+  the D2 residual window made real — throws rather than silently confirming one case.
+- **testSubmission is a config flag, default true**: creating real partner cases is a
+  deliberate per-deployment opt-in at pilot time, replacing the facade's hardcode.
+- SELECT options parse newline-first with comma fallback — the production ZAF rule.
+
+Live receipt: SdkTsanetGatewayBetaContractTest (env-gated; CI skips it green) passed
+5/5 against BETA with the sdk1/sdk2 members on 2026-08-05, 2.8s wall clock for login +
+search + form + create + reconcile — comfortably inside the D2 budgets.
