@@ -28,18 +28,26 @@ Measured 2026-08-04: an 8s canvas response renders; a 10s response fails. Failur
 asymmetric: slow initialize shows an error card with a working "Try again"; slow submit
 strands the agent on a spinner with no error.
 
-**Amended for Phase 1 (advisor-reviewed):** canvas handlers may make **at most one**
-gateway call per response under a hard total deadline (1500ms for idempotent reads,
-4000ms for submit; both are total-call deadlines, not read timeouts), with **no
-in-handler retries**: a read timeout renders a retry canvas and the agent decides.
-Case submission is not idempotent, so a submit timeout never blind-retries: the flow
-reconciles through findSubmission keyed on internalCaseNumber (the Connect API filters
-on it, making it our idempotency key) and only offers retry when the lookup confirms
-nothing landed. Timeout rate gets a counter the day the SDK gateway lands (the fake is
-instant, so there is nothing to measure before then); the counter validates the 1500ms
-figure against real BETA partners. Anything heavier than one bounded call still goes
-through the event queue. Deadline enforcement itself is an SDK-gateway (slice 2)
-obligation with a contract-test hook.
+**Amended for Phase 1 (advisor-reviewed; reconcile wording corrected after PR #1 QA):**
+canvas handlers may make **at most one** gateway call per response under a hard total
+deadline (1500ms for idempotent reads, 4000ms for submit; both are total-call deadlines,
+not read timeouts), with **no in-handler retries**: a read timeout renders a retry
+canvas and the agent decides. Case submission is not idempotent and the Connect API
+provides no idempotency: `internalCaseNumber` is a `required: false` query filter on
+the list/read operations, and `createCollaborationRequest` documents 200/400/401 only —
+no conflict or duplicate rejection — so a second POST carrying the same value simply
+creates a second case. Reconciliation through findSubmission(internalCaseNumber) is
+therefore **best-effort lookup, not an idempotency guarantee**: a submit timeout parks
+the flow UNRESOLVED, the UNRESOLVED -> DRAFT transition on a lookup that found nothing
+is the server-side marker that re-arms retry (client-supplied component ids are never
+trusted for this), and an empty lookup cannot prove the original request is not still
+in flight — that residual duplicate window is accepted and named in the agent-facing
+copy. Timeout rate gets a counter the day the SDK gateway lands (the fake is instant,
+so there is nothing to measure before then); the counter validates the 1500ms figure
+against real BETA partners. Anything heavier than one bounded call still goes through
+the event queue. Deadline enforcement is an SDK-gateway (slice 2) obligation verified
+by that module's own deadline tests; the shared contract test covers timeout-reconcile
+semantics via the injectable fake, not wall-clock budgets.
 
 ## D3. Verify effects; never trust a bare 200 (Intercom API)
 
