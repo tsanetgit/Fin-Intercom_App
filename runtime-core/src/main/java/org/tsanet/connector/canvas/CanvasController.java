@@ -1,44 +1,315 @@
 package org.tsanet.connector.canvas;
 
-import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.tsanet.connector.tsanet.GatewayException;
+import org.tsanet.connector.tsanet.GatewayTimeoutException;
+import org.tsanet.connector.tsanet.TsanetGateway;
+import org.tsanet.connector.tsanet.dto.FormField;
+import org.tsanet.connector.tsanet.dto.PartnerHit;
+import org.tsanet.connector.tsanet.dto.ProcessForm;
+import org.tsanet.connector.tsanet.dto.SubmissionDraft;
+import org.tsanet.connector.tsanet.dto.SubmissionResult;
 
 /**
- * The sidebar app. Budget rule (docs/decisions.md D2): handlers here perform ZERO
- * outbound calls; verify (filter), read context, respond. Measured platform timeout is
- * ~10s and a slow submit strands the agent on a spinner, so anything slower than an
- * in-memory computation must go through the event queue and reach the panel on a later
- * render. TsanetGateway is deliberately not referenced from this package in Phase 0.
+ * The outbound submission flow (Phase 1 slice 1). Budget rule (docs/decisions.md D2,
+ * amended): at most ONE bounded gateway call per canvas response, no in-handler
+ * retries; read timeouts render a retry path, and a submit timeout goes through the
+ * findSubmission reconcile before any resubmission, because submits are not idempotent.
+ * Flow state lives server-side behind an opaque pointer in stored_data (D8).
  */
 @RestController
 public class CanvasController {
 
-    private static final DateTimeFormatter CLOCK = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private final FlowStateStore flows;
+    private final TsanetGateway gateway;
+
+    public CanvasController(FlowStateStore flows, TsanetGateway gateway) {
+        this.flows = flows;
+        this.gateway = gateway;
+    }
 
     @PostMapping("/canvas/initialize")
     public Map<String, Object> initialize(@RequestBody Map<String, Object> payload) {
-        return statusCanvas(payload, "Panel initialized");
+        return home(flows.create(), surface(payload), null);
     }
 
     @PostMapping("/canvas/submit")
     public Map<String, Object> submit(@RequestBody Map<String, Object> payload) {
-        Object component = payload.get("component_id");
-        return statusCanvas(payload, component == null ? "Submitted" : "Received: " + component);
+        String surface = surface(payload);
+        OutboundFlowState state = flows.find(storedFlowId(payload));
+        if (state == null) {
+            return home(flows.create(), surface, "That panel session expired; starting over.");
+        }
+        String component = String.valueOf(payload.getOrDefault("component_id", ""));
+        Map<String, String> inputs = inputValues(payload);
+
+        if ("back_home".equals(component)) {
+            // New flow id on purpose: internalCaseNumber == flowId, one per submission.
+            return home(flows.create(), surface, null);
+        }
+        if ("search".equals(component)) {
+            return doSearch(state, surface, inputs.getOrDefault("q", "").trim());
+        }
+        if (component.startsWith("select:")) {
+            return doSelect(state, component.substring("select:".length()));
+        }
+        if ("submit_case".equals(component) || "retry_submit".equals(component)) {
+            return doSubmit(state, payload, inputs, "retry_submit".equals(component));
+        }
+        if ("check_status".equals(component)) {
+            return doCheckStatus(state);
+        }
+        return home(flows.create(), surface, null);
     }
 
-    private static Map<String, Object> statusCanvas(Map<String, Object> payload, String action) {
-        // Ticket renders carry a top-level `ticket` object; conversation renders omit it
-        // (verified live 2026-08-04, docs/decisions.md D5).
-        String surface = payload.get("ticket") != null ? "ticket" : "conversation";
+    // ---- steps ----
+
+    private Map<String, Object> doSearch(OutboundFlowState state, String surface, String query) {
+        if (query.isEmpty()) {
+            return home(state, surface, "Enter a partner name or tag to search.");
+        }
+        List<PartnerHit> hits;
+        try {
+            hits = gateway.searchPartners(query);
+        } catch (GatewayException e) {
+            return home(state, surface, "Partner search failed (" + e.getMessage() + "); try again.");
+        }
+        if (hits.isEmpty()) {
+            return home(state, surface, "No partners matched \"" + query + "\".");
+        }
+        state.hits(hits);
+        List<Map<String, Object>> components = new ArrayList<>();
+        components.add(CanvasKit.header("Select a partner"));
+        components.add(CanvasKit.muted(hits.size() + " result(s) for \"" + query + "\""));
+        for (int i = 0; i < hits.size(); i++) {
+            components.add(CanvasKit.button("select:" + i, hits.get(i).display()));
+        }
+        components.add(CanvasKit.divider());
+        components.add(CanvasKit.button("back_home", "Start over"));
+        return CanvasKit.canvas(components, pointer(state));
+    }
+
+    private Map<String, Object> doSelect(OutboundFlowState state, String indexRaw) {
+        int index;
+        try {
+            index = Integer.parseInt(indexRaw);
+        } catch (NumberFormatException e) {
+            index = -1;
+        }
+        if (index < 0 || index >= state.hits().size()) {
+            return home(state, "conversation", "That selection is no longer valid; search again.");
+        }
+        PartnerHit partner = state.hits().get(index);
+        ProcessForm form;
+        try {
+            form = gateway.form(partner);
+        } catch (GatewayException e) {
+            return home(state, "conversation",
+                    "Couldn't load the form for " + partner.display() + " (" + e.getMessage() + "); try again.");
+        }
+        List<FormField> unsupported = form.unsupportedFields();
+        if (!unsupported.isEmpty()) {
+            String types = unsupported.stream()
+                    .map(f -> f.label() + " [" + f.type() + "]")
+                    .collect(Collectors.joining(", "));
+            return CanvasKit.canvas(List.of(
+                    CanvasKit.header("Form not supported yet"),
+                    CanvasKit.error(partner.display() + "'s process form uses field types this connector"
+                            + " doesn't support yet: " + types + ". File a connector issue; meanwhile this"
+                            + " case can be submitted via the TSANet web app."),
+                    CanvasKit.button("back_home", "Start over")), pointer(state));
+        }
+        state.partner(partner);
+        state.form(form);
+        return formCanvas(state, null);
+    }
+
+    private Map<String, Object> formCanvas(OutboundFlowState state, String notice) {
+        ProcessForm form = state.form();
+        List<Map<String, Object>> components = new ArrayList<>();
+        components.add(CanvasKit.header(state.partner().display()));
+        if (notice != null) {
+            components.add(CanvasKit.error(notice));
+        }
+        if (form.adminNote() != null && !form.adminNote().isBlank()) {
+            components.add(CanvasKit.muted("Partner note: " + form.adminNote()));
+        }
+        components.add(CanvasKit.input("summary", "Problem summary (required)", "One line", state.values().get("summary")));
+        components.add(CanvasKit.textarea("description", "Problem description (required)", "What happened, impact, versions",
+                state.values().get("description")));
+        for (FormField field : form.fields()) {
+            String id = "f_" + field.fieldId();
+            String label = field.label() + (field.required() ? " (required)" : "");
+            if ("SELECT".equalsIgnoreCase(field.type())) {
+                components.add(CanvasKit.singleSelect(id, label, field.options(), state.values().get(id)));
+            } else {
+                components.add(CanvasKit.input(id, label, null, state.values().get(id)));
+            }
+        }
+        components.add(CanvasKit.divider());
+        components.add(CanvasKit.button("submit_case", "Submit to partner"));
+        components.add(CanvasKit.button("back_home", "Start over"));
+        return CanvasKit.canvas(components, pointer(state));
+    }
+
+    private Map<String, Object> doSubmit(OutboundFlowState state, Map<String, Object> payload,
+            Map<String, String> inputs, boolean retry) {
+        if (state.form() == null || state.partner() == null) {
+            return home(flows.create(), surface(payload), "That panel session lost its form; starting over.");
+        }
+        // Re-entry guards: the same flow can be open in two tabs (or two teammates'
+        // panels). A landed submit renders its outcome; an unresolved one forces the
+        // reconcile path. Either way, no second gateway.submit for this flow.
+        if (state.result() != null) {
+            return confirmation(state);
+        }
+        if (state.submitPending() && !retry) {
+            return pendingCanvas(state);
+        }
+        if (!retry) {
+            state.values().putAll(inputs);
+        }
+        List<String> missing = new ArrayList<>();
+        if (blank(state.values().get("summary"))) {
+            missing.add("Problem summary");
+        }
+        if (blank(state.values().get("description"))) {
+            missing.add("Problem description");
+        }
+        for (FormField field : state.form().fields()) {
+            if (field.required() && blank(state.values().get("f_" + field.fieldId()))) {
+                missing.add(field.label());
+            }
+        }
+        if (!missing.isEmpty()) {
+            return formCanvas(state, "Missing required: " + String.join(", ", missing));
+        }
+        SubmissionDraft draft = draftFrom(state, payload);
+        try {
+            SubmissionResult result = gateway.submit(draft);
+            state.result(result);
+            state.submitPending(false);
+            return confirmation(state);
+        } catch (GatewayTimeoutException e) {
+            state.submitPending(true);
+            return pendingCanvas(state);
+        } catch (GatewayException e) {
+            return formCanvas(state, "Submission failed (" + e.getMessage() + "); fix and resubmit.");
+        }
+    }
+
+    private Map<String, Object> pendingCanvas(OutboundFlowState state) {
         return CanvasKit.canvas(List.of(
-                CanvasKit.header("TSANet Connect"),
-                CanvasKit.muted(action + " on a " + surface + " at " + LocalTime.now().format(CLOCK)
-                        + ". Runtime skeleton: partner search and case flows arrive in Phase 1."),
-                CanvasKit.button("ping", "Ping the runtime")));
+                CanvasKit.header("Submission status unknown"),
+                CanvasKit.error("The request timed out but may still have created the case."
+                        + " Check the status before retrying, to avoid a duplicate partner case."),
+                CanvasKit.button("check_status", "Check status"),
+                CanvasKit.button("back_home", "Start over")), pointer(state));
+    }
+
+    private Map<String, Object> doCheckStatus(OutboundFlowState state) {
+        try {
+            return gateway.findSubmission(state.flowId())
+                    .map(result -> {
+                        state.result(result);
+                        state.submitPending(false);
+                        return confirmation(state);
+                    })
+                    .orElseGet(() -> CanvasKit.canvas(List.of(
+                            CanvasKit.header("No case found yet"),
+                            CanvasKit.muted("The submission did not go through. It is safe to retry."),
+                            CanvasKit.button("retry_submit", "Retry submission"),
+                            CanvasKit.button("back_home", "Start over")), pointer(state)));
+        } catch (GatewayException e) {
+            return CanvasKit.canvas(List.of(
+                    CanvasKit.header("Submission status unknown"),
+                    CanvasKit.error("Status check failed (" + e.getMessage() + "); try again."),
+                    CanvasKit.button("check_status", "Check status"),
+                    CanvasKit.button("back_home", "Start over")), pointer(state));
+        }
+    }
+
+    private Map<String, Object> confirmation(OutboundFlowState state) {
+        SubmissionResult result = state.result();
+        List<Map<String, Object>> components = new ArrayList<>();
+        components.add(CanvasKit.header("Case submitted"));
+        components.add(CanvasKit.muted("Partner: " + state.partner().display()));
+        components.add(CanvasKit.muted("Token: " + result.token()));
+        if (result.respondBy() != null) {
+            components.add(CanvasKit.muted("Partner respond-by: " + result.respondBy()));
+        }
+        if (result.testCase()) {
+            components.add(CanvasKit.muted("Test submission: no partner SLA or notifications."));
+        }
+        components.add(CanvasKit.divider());
+        components.add(CanvasKit.button("back_home", "New collaboration"));
+        return CanvasKit.canvas(components, pointer(state));
+    }
+
+    private Map<String, Object> home(OutboundFlowState state, String surface, String notice) {
+        List<Map<String, Object>> components = new ArrayList<>();
+        components.add(CanvasKit.header("TSANet Connect"));
+        if (notice != null) {
+            components.add(CanvasKit.error(notice));
+        }
+        components.add(CanvasKit.muted("Start a partner collaboration from this " + surface + "."));
+        components.add(CanvasKit.input("q", "Partner name or tag", "e.g. NetApp, storage", null));
+        components.add(CanvasKit.button("search", "Search partners"));
+        return CanvasKit.canvas(components, pointer(state));
+    }
+
+    // ---- plumbing ----
+
+    private SubmissionDraft draftFrom(OutboundFlowState state, Map<String, Object> payload) {
+        Map<String, String> fieldValues = state.values().entrySet().stream()
+                .filter(e -> e.getKey().startsWith("f_"))
+                .collect(Collectors.toMap(e -> e.getKey().substring(2), Map.Entry::getValue));
+        Map<?, ?> admin = payload.get("admin") instanceof Map<?, ?> m ? m : Map.of();
+        Object name = admin.get("name");
+        Object email = admin.get("email");
+        return new SubmissionDraft(
+                state.flowId(),
+                state.form().documentId(),
+                state.values().get("summary"),
+                state.values().get("description"),
+                fieldValues,
+                name == null ? "" : String.valueOf(name),
+                email == null ? "" : String.valueOf(email));
+    }
+
+    private static Map<String, Object> pointer(OutboundFlowState state) {
+        return Map.of("flow_id", state.flowId());
+    }
+
+    private static String surface(Map<String, Object> payload) {
+        return payload.get("ticket") != null ? "ticket" : "conversation";
+    }
+
+    private static String storedFlowId(Map<String, Object> payload) {
+        if (payload.get("current_canvas") instanceof Map<?, ?> canvas
+                && canvas.get("stored_data") instanceof Map<?, ?> stored
+                && stored.get("flow_id") != null) {
+            return String.valueOf(stored.get("flow_id"));
+        }
+        return null;
+    }
+
+    private static Map<String, String> inputValues(Map<String, Object> payload) {
+        if (payload.get("input_values") instanceof Map<?, ?> raw) {
+            return raw.entrySet().stream()
+                    .filter(e -> e.getValue() != null)
+                    .collect(Collectors.toMap(e -> String.valueOf(e.getKey()), e -> String.valueOf(e.getValue())));
+        }
+        return Map.of();
+    }
+
+    private static boolean blank(String s) {
+        return s == null || s.isBlank();
     }
 }

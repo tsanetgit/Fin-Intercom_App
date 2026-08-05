@@ -1,0 +1,185 @@
+package org.tsanet.connector.canvas;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
+import java.util.Iterator;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+
+/**
+ * Walks the whole outbound flow, signed, against the fake gateway. Every step asserts
+ * the flow pointer survives the transition (the advisor's echo-forward warning: losing
+ * stored_data between canvases is the classic Canvas Kit bug).
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+@TestPropertySource(properties = {
+        "connector.intercom-client-secret=test-intercom-secret",
+        "connector.tsanet-webhook-secret=test-tsanet-secret",
+})
+class OutboundFlowTest {
+
+    @Autowired
+    private MockMvc mvc;
+
+    private final ObjectMapper json = new ObjectMapper();
+
+    private static String sign(byte[] body) throws Exception {
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec("test-intercom-secret".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        StringBuilder sb = new StringBuilder();
+        for (byte b : mac.doFinal(body)) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
+    }
+
+    private JsonNode post(String path, String body) throws Exception {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        String response = mvc.perform(MockMvcRequestBuilders.post(path)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("X-Body-Signature", sign(bytes))
+                        .content(bytes))
+                .andReturn().getResponse().getContentAsString();
+        return json.readTree(response);
+    }
+
+    private JsonNode initialize() throws Exception {
+        return post("/canvas/initialize", "{\"workspace_id\":\"w1\",\"admin\":{\"name\":\"Agent A\",\"email\":\"agent@tsanet.org\"}}");
+    }
+
+    private JsonNode submit(String flowId, String componentId, String inputValuesJson) throws Exception {
+        return post("/canvas/submit", "{\"workspace_id\":\"w1\",\"admin\":{\"name\":\"Agent A\",\"email\":\"agent@tsanet.org\"},"
+                + "\"component_id\":\"" + componentId + "\","
+                + "\"current_canvas\":{\"stored_data\":{\"flow_id\":\"" + flowId + "\"}},"
+                + "\"input_values\":" + inputValuesJson + "}");
+    }
+
+    private static String flowId(JsonNode canvas) {
+        return canvas.at("/canvas/stored_data/flow_id").asText();
+    }
+
+    private static String allText(JsonNode canvas) {
+        StringBuilder sb = new StringBuilder();
+        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+            JsonNode component = it.next();
+            if (component.has("text")) {
+                sb.append(component.get("text").asText()).append('\n');
+            }
+            if (component.has("label")) {
+                sb.append(component.get("label").asText()).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    @Test
+    void happyPathSubmitsAndConfirms() throws Exception {
+        JsonNode home = initialize();
+        String flow = flowId(home);
+        assertNotNull(flow);
+
+        JsonNode results = submit(flow, "search", "{\"q\":\"netapp\"}");
+        assertEquals(flow, flowId(results), "flow pointer must survive search");
+        assertTrue(allText(results).contains("NetApp | Storage Division"));
+
+        JsonNode form = submit(flow, "select:0", "{}");
+        assertEquals(flow, flowId(form), "flow pointer must survive selection");
+        String formText = allText(form);
+        assertTrue(formText.contains("Serial Number"));
+        assertTrue(formText.contains("Partner note:"));
+
+        JsonNode invalid = submit(flow, "submit_case", "{\"summary\":\"\",\"description\":\"broken volume\"}");
+        assertTrue(allText(invalid).contains("Missing required:"));
+        assertTrue(allText(invalid).contains("Serial Number"));
+
+        JsonNode confirmed = submit(flow, "submit_case",
+                "{\"summary\":\"Latency spike\",\"description\":\"volumes degraded\",\"f_88\":\"SN-1\",\"f_89\":\"High\"}");
+        String confirmedText = allText(confirmed);
+        assertTrue(confirmedText.contains("Case submitted"));
+        assertTrue(confirmedText.contains("Token: TSA-"));
+        assertEquals(flow, flowId(confirmed), "flow pointer must survive submission");
+    }
+
+    @Test
+    void submitTimeoutReconcilesWithoutDuplicate() throws Exception {
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:0", "{}");
+
+        JsonNode pending = submit(flow, "submit_case",
+                "{\"summary\":\"please timeout now\",\"description\":\"desc\",\"f_88\":\"SN-2\",\"f_89\":\"Low\"}");
+        assertTrue(allText(pending).contains("Submission status unknown"));
+
+        // A stale tab re-clicking submit while the outcome is unresolved must be forced
+        // onto the reconcile path, never into a second gateway.submit.
+        JsonNode guarded = submit(flow, "submit_case",
+                "{\"summary\":\"please timeout now\",\"description\":\"desc\",\"f_88\":\"SN-2\",\"f_89\":\"Low\"}");
+        assertTrue(allText(guarded).contains("Submission status unknown"));
+
+        JsonNode reconciled = submit(flow, "check_status", "{}");
+        String text = allText(reconciled);
+        assertTrue(text.contains("Case submitted"), "lookup must find the case the timeout hid");
+        assertTrue(text.contains("Token: TSA-"));
+    }
+
+    @Test
+    void duplicateSubmitRendersTheSameTokenInsteadOfASecondCase() throws Exception {
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:0", "{}");
+        String first = allText(submit(flow, "submit_case",
+                "{\"summary\":\"Latency spike\",\"description\":\"desc\",\"f_88\":\"SN-3\",\"f_89\":\"High\"}"));
+        assertTrue(first.contains("Case submitted"));
+        String token1 = first.replaceAll("(?s).*Token: (TSA-[0-9a-f]+).*", "$1");
+
+        // Same flow, second tab, submit clicked again: the fake mints a fresh token per
+        // gateway.submit, so an identical token proves no second submission happened.
+        String second = allText(submit(flow, "submit_case",
+                "{\"summary\":\"Latency spike\",\"description\":\"desc\",\"f_88\":\"SN-3\",\"f_89\":\"High\"}"));
+        assertTrue(second.contains("Case submitted"));
+        String token2 = second.replaceAll("(?s).*Token: (TSA-[0-9a-f]+).*", "$1");
+        assertEquals(token1, token2, "re-entry must render the landed outcome, not create a duplicate case");
+    }
+
+    @Test
+    void unsupportedFormFailsLoudly() throws Exception {
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"unsupported\"}");
+        JsonNode blocked = submit(flow, "select:0", "{}");
+        String text = allText(blocked);
+        assertTrue(text.contains("doesn't support yet"));
+        assertTrue(text.contains("FILES"));
+    }
+
+    @Test
+    void searchFailureRendersRetryableHome() throws Exception {
+        String flow = flowId(initialize());
+        JsonNode failed = submit(flow, "search", "{\"q\":\"failsearch\"}");
+        String text = allText(failed);
+        assertTrue(text.contains("Partner search failed"));
+        assertTrue(text.contains("Partner name or tag"), "home search input must be back for retry");
+    }
+
+    @Test
+    void backHomeMintsAFreshFlowId() throws Exception {
+        String flow = flowId(initialize());
+        JsonNode fresh = submit(flow, "back_home", "{}");
+        assertNotNull(flowId(fresh));
+        assertTrue(!flow.equals(flowId(fresh)),
+                "internalCaseNumber == flowId, so a new collaboration needs a new flow id");
+    }
+}

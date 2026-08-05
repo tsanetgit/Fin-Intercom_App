@@ -26,10 +26,20 @@ secrets fail closed (401), never open.
 
 Measured 2026-08-04: an 8s canvas response renders; a 10s response fails. Failure UX is
 asymmetric: slow initialize shows an error card with a working "Try again"; slow submit
-strands the agent on a spinner with no error. Therefore canvas handlers perform **zero
-outbound calls**: verify, read context, enqueue if needed, respond. Anything slower than
-that budget goes through the event queue and reaches the panel via a later render.
-`TsanetGateway` is deliberately not referenced by any canvas handler in this skeleton.
+strands the agent on a spinner with no error.
+
+**Amended for Phase 1 (advisor-reviewed):** canvas handlers may make **at most one**
+gateway call per response under a hard total deadline (1500ms for idempotent reads,
+4000ms for submit; both are total-call deadlines, not read timeouts), with **no
+in-handler retries**: a read timeout renders a retry canvas and the agent decides.
+Case submission is not idempotent, so a submit timeout never blind-retries: the flow
+reconciles through findSubmission keyed on internalCaseNumber (the Connect API filters
+on it, making it our idempotency key) and only offers retry when the lookup confirms
+nothing landed. Timeout rate gets a counter the day the SDK gateway lands (the fake is
+instant, so there is nothing to measure before then); the counter validates the 1500ms
+figure against real BETA partners. Anything heavier than one bounded call still goes
+through the event queue. Deadline enforcement itself is an SDK-gateway (slice 2)
+obligation with a contract-test hook.
 
 ## D3. Verify effects; never trust a bare 200 (Intercom API)
 
@@ -78,3 +88,22 @@ No Spring Security (the HMAC filter is the whole auth story). No async executors
 budget is enforced by doing no slow work at all). No persistence (registry and queue are
 in-memory until Phase 1-2 give them real backing). No Intercom API client yet (Phase 1,
 and it arrives with the D3 rule baked in).
+
+## D8. Canvas flow state: opaque pointer, and gateway-first development
+
+stored_data carries only `{flow_id}`; the real flow state (search hits, selected
+partner, form, entered values, submission result) lives server-side in a bounded,
+TTL'd store. This sidesteps the canvas payload size limit and the
+does-stored_data-transit-the-client question entirely (nothing tamperable rides in it;
+ids arriving from it are still treated as untrusted, and the Connect API remains the
+final validator). An expired or evicted flow restarts cleanly from the home canvas.
+The flow id doubles as the submission's internalCaseNumber, one per flow by
+construction.
+
+The canvas flow was built against a failure-injectable FakeTsanetGateway whose
+fixtures mirror the Connect API contract, with an abstract gateway contract test that
+the SDK-backed gateway must also pass in slice 2; the fake refuses to start under the
+prod profile. Component shapes for input/textarea/single-select follow the Canvas Kit
+reference and get re-verified on a live workspace render before slice 1 is called
+done; `input_values` parsing is likewise asserted live (our spike canvases had no
+inputs, so those payload keys are documented-but-not-yet-observed).

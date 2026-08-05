@@ -1,7 +1,6 @@
 package org.tsanet.connector.canvas;
 
 import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -39,37 +38,41 @@ class CanvasControllerTest {
     }
 
     @Test
-    void initializeReturnsCanvasComponents() throws Exception {
+    void initializeRendersHomeWithSearchAndFlowPointer() throws Exception {
         byte[] body = "{\"workspace_id\":\"w1\",\"conversation\":{\"id\":1}}".getBytes(StandardCharsets.UTF_8);
         mvc.perform(post("/canvas/initialize").contentType(MediaType.APPLICATION_JSON)
                         .header("X-Body-Signature", sign(body)).content(body))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.canvas.content.components").isNotEmpty())
-                .andExpect(jsonPath("$.canvas.content.components[0].text").value("TSANet Connect"));
+                .andExpect(jsonPath("$.canvas.content.components[0].text").value("TSANet Connect"))
+                .andExpect(jsonPath("$.canvas.content.components[?(@.id=='q')]").exists())
+                .andExpect(jsonPath("$.canvas.content.components[?(@.id=='search')]").exists())
+                .andExpect(jsonPath("$.canvas.stored_data.flow_id").isNotEmpty());
     }
 
     @Test
-    void detectsTicketSurfaceFromTopLevelTicketKey() throws Exception {
+    void detectsTicketSurfaceOnTheHomeCanvas() throws Exception {
         byte[] ticket = "{\"workspace_id\":\"w1\",\"ticket\":{\"id\":9}}".getBytes(StandardCharsets.UTF_8);
         mvc.perform(post("/canvas/initialize").contentType(MediaType.APPLICATION_JSON)
                         .header("X-Body-Signature", sign(ticket)).content(ticket))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.canvas.content.components[1].text").value(containsString("on a ticket")));
+                .andExpect(jsonPath("$.canvas.content.components[1].text").value(containsString("from this ticket")));
 
         byte[] conversation = "{\"workspace_id\":\"w1\"}".getBytes(StandardCharsets.UTF_8);
         mvc.perform(post("/canvas/initialize").contentType(MediaType.APPLICATION_JSON)
                         .header("X-Body-Signature", sign(conversation)).content(conversation))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.canvas.content.components[1].text").value(containsString("on a conversation")))
-                .andExpect(jsonPath("$.canvas.content.components[1].text").value(not(containsString("on a ticket"))));
+                .andExpect(
+                        jsonPath("$.canvas.content.components[1].text").value(containsString("from this conversation")));
     }
 
     @Test
-    void submitEchoesComponentId() throws Exception {
-        byte[] body = "{\"workspace_id\":\"w1\",\"component_id\":\"ping\"}".getBytes(StandardCharsets.UTF_8);
+    void expiredFlowRestartsAtHomeWithNotice() throws Exception {
+        byte[] body = ("{\"workspace_id\":\"w1\",\"component_id\":\"search\","
+                + "\"current_canvas\":{\"stored_data\":{\"flow_id\":\"no-such-flow\"}},"
+                + "\"input_values\":{\"q\":\"netapp\"}}").getBytes(StandardCharsets.UTF_8);
         mvc.perform(post("/canvas/submit").contentType(MediaType.APPLICATION_JSON)
                         .header("X-Body-Signature", sign(body)).content(body))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.canvas.content.components[1].text").value(containsString("Received: ping")));
+                .andExpect(jsonPath("$.canvas.content.components[1].text").value(containsString("expired")));
     }
 }
