@@ -34,6 +34,7 @@ public class FakeTsanetGateway implements TsanetGateway {
 
     private final Environment environment;
     private final Map<String, SubmissionResult> submitted = new ConcurrentHashMap<>();
+    private volatile SubmissionDraft lastDraft;
 
     public FakeTsanetGateway(Environment environment) {
         this.environment = environment;
@@ -82,8 +83,14 @@ public class FakeTsanetGateway implements TsanetGateway {
                         new FormField("90", "Firmware Version", "STRING", false, "PROBLEM_SECTION", List.of())));
     }
 
+    /** The draft most recently handed to {@link #submit}, for test assertions. */
+    public SubmissionDraft lastDraft() {
+        return lastDraft;
+    }
+
     @Override
     public SubmissionResult submit(SubmissionDraft draft) {
+        this.lastDraft = draft;
         String summary = draft.summary() == null ? "" : draft.summary().toLowerCase();
         if (summary.contains("timeout-lost")) {
             throw new GatewayTimeoutException("injected submit timeout (request lost in transit)");

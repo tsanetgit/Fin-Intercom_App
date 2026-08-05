@@ -3,6 +3,8 @@ package org.tsanet.connector.canvas;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -150,9 +152,20 @@ public class CanvasController {
                             + " case can be submitted via the TSANet web app."),
                     CanvasKit.button("back_home", "Start over")), pointer(state));
         }
+        PartnerHit previous = state.partner();
+        if (previous == null || !sameTarget(previous, partner)) {
+            // A different partner means a different process form; values typed for the
+            // old form must not pre-fill (or ride into a submission against) the new one.
+            state.clearFieldValues();
+        }
         state.partner(partner);
         state.form(form);
         return formCanvas(state, null);
+    }
+
+    private static boolean sameTarget(PartnerHit a, PartnerHit b) {
+        return Objects.equals(a.companyId(), b.companyId())
+                && Objects.equals(a.departmentId(), b.departmentId());
     }
 
     private Map<String, Object> formCanvas(OutboundFlowState state, String notice) {
@@ -325,8 +338,13 @@ public class CanvasController {
     // ---- plumbing ----
 
     private SubmissionDraft draftFrom(OutboundFlowState state, Map<String, Object> payload) {
+        // Only fields on the CURRENT form may ride into the submission; input_values is
+        // client-supplied and values can hold residue from earlier canvases.
+        Set<String> formKeys = state.form().fields().stream()
+                .map(f -> "f_" + f.fieldId())
+                .collect(Collectors.toSet());
         Map<String, String> fieldValues = state.values().entrySet().stream()
-                .filter(e -> e.getKey().startsWith("f_"))
+                .filter(e -> formKeys.contains(e.getKey()))
                 .collect(Collectors.toMap(e -> e.getKey().substring(2), Map.Entry::getValue));
         Map<?, ?> admin = payload.get("admin") instanceof Map<?, ?> m ? m : Map.of();
         Object name = admin.get("name");

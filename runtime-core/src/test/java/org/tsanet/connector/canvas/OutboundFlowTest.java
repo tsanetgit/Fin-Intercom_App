@@ -18,7 +18,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
-import org.tsanet.connector.tsanet.TsanetGateway;
+import org.tsanet.connector.tsanet.FakeTsanetGateway;
 
 /**
  * Walks the whole outbound flow, signed, against the fake gateway. Every step asserts
@@ -38,7 +38,7 @@ class OutboundFlowTest {
 
     /** The fake gateway bean, read directly to observe what the flow actually submitted. */
     @Autowired
-    private TsanetGateway gateway;
+    private FakeTsanetGateway gateway;
 
     private final ObjectMapper json = new ObjectMapper();
 
@@ -75,6 +75,16 @@ class OutboundFlowTest {
 
     private static String flowId(JsonNode canvas) {
         return canvas.at("/canvas/stored_data/flow_id").asText();
+    }
+
+    private static String componentValue(JsonNode canvas, String id) {
+        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+            JsonNode component = it.next();
+            if (component.has("id") && id.equals(component.get("id").asText())) {
+                return component.has("value") ? component.get("value").asText() : null;
+            }
+        }
+        return null;
     }
 
     private static String allText(JsonNode canvas) {
@@ -250,6 +260,29 @@ class OutboundFlowTest {
                 "{\"summary\":\"real summary this time\",\"description\":\"desc\",\"f_88\":\"SN-6\",\"f_89\":\"Low\"}");
         assertTrue(allText(confirmed).contains("Case submitted"),
                 "after a reconcile that found nothing, submitting is legal again");
+    }
+
+    @Test
+    void staleFieldValuesDoNotSurvivePartnerChange() throws Exception {
+        // QA finding 5 (probe-confirmed): values typed for partner A's form pre-filled
+        // partner B's form and would have ridden into B's submission. Fixture partners
+        // share field ids (88/89/90), which is exactly the dangerous case.
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:0", "{}");
+        submit(flow, "submit_case", "{\"summary\":\"\",\"description\":\"\",\"f_88\":\"STALE-SERIAL\"}");
+
+        JsonNode secondForm = submit(flow, "select:1", "{}");
+        assertEquals(null, componentValue(secondForm, "f_88"),
+                "a different partner's form must not pre-fill with the old form's values");
+
+        // And the draft is scoped to the CURRENT form: an injected key that is not on
+        // the form must never reach the gateway.
+        JsonNode confirmed = submit(flow, "submit_case",
+                "{\"summary\":\"s\",\"description\":\"d\",\"f_88\":\"SN-7\",\"f_89\":\"High\",\"f_999\":\"NOT-ON-FORM\"}");
+        assertTrue(allText(confirmed).contains("Case submitted"));
+        assertEquals(java.util.Set.of("88", "89"), gateway.lastDraft().values().keySet(),
+                "only current-form fields may ride into the submission");
     }
 
     @Test
