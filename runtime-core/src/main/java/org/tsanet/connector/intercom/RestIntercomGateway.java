@@ -88,7 +88,10 @@ public class RestIntercomGateway implements IntercomGateway {
         }
         try {
             put(link.ticketId(), attrs);
-            return respondByEpoch == null ? AnnotationOutcome.DEGRADED : AnnotationOutcome.FULL;
+            // No respond-by on the case (or unparseable) means nothing applicable was
+            // dropped: that is FULL, not DEGRADED — degradation is strictly a write
+            // that had to shed a field to get through.
+            return AnnotationOutcome.FULL;
         } catch (HttpClientErrorException rejected) {
             if (respondByEpoch == null) {
                 throw fail("attributes", rejected);

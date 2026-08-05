@@ -92,6 +92,12 @@ the reconciliation poller remains the source of truth in both directions.
 - The top-level `ticket` key rides EVERY canvas request type from a ticket surface
   (initialize and submit both, per the spike hit log), so the landing request's
   payload always carries the anchor.
+- Real Connect process forms use more field types than STRING/SELECT: sdk2's live
+  BETA form carries required EMAIL plus PHONE (found by the Phase-1 exit E2E when the
+  original supported-set rejected it into the unsupported-type dead end). Text-shaped
+  types (STRING/EMAIL/PHONE/INTEGER/URL) render as inputs with the Connect API as the
+  format validator, TEXT as a textarea, HIDDEN is submitted from the form template and
+  never rendered; genuinely unrenderable types (FILES etc.) keep the loud failure.
 
 ## D6. Module split and the SDK pin
 

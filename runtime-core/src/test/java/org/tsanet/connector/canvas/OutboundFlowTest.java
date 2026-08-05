@@ -317,6 +317,44 @@ class OutboundFlowTest {
     }
 
     @Test
+    void typedFormFieldsRenderByShapeAndHiddenStaysServerSide() throws Exception {
+        // Real BETA forms carry EMAIL/PHONE/TEXT/HIDDEN (the Phase-1 exit E2E found a
+        // required EMAIL on sdk2's live form that the old STRING/SELECT set rejected
+        // into the unsupported-type dead end).
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"typed\"}");
+        JsonNode form = submit(flow, "select:2200|555", "{}");
+        String text = allText(form);
+        assertTrue(text.contains("Customer Email (required)"));
+        assertTrue(text.contains("Impact Details (required)"));
+        assertTrue(!text.contains("Routing Code"), "HIDDEN fields never render");
+        assertEquals("input", componentType(form, "f_61"), "EMAIL renders as a text input");
+        assertEquals("textarea", componentType(form, "f_63"), "TEXT renders as a textarea");
+
+        JsonNode missing = submit(flow, "submit_case", "{\"summary\":\"s\",\"description\":\"d\"}");
+        String missingText = allText(missing);
+        assertTrue(missingText.contains("Customer Email"));
+        assertTrue(!missingText.contains("Routing Code"),
+                "a required HIDDEN field is the form template's job, not the agent's");
+
+        JsonNode confirmed = submit(flow, "submit_case",
+                "{\"summary\":\"s\",\"description\":\"d\",\"f_61\":\"cust@example.com\",\"f_63\":\"impact\"}");
+        assertTrue(allText(confirmed).contains("Case submitted"));
+        assertEquals(java.util.Set.of("61", "63"), gateway.lastDraft().values().keySet(),
+                "hidden fields are never typed so never ride the draft");
+    }
+
+    private static String componentType(JsonNode canvas, String id) {
+        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+            JsonNode component = it.next();
+            if (component.has("id") && id.equals(component.get("id").asText())) {
+                return component.path("type").asText();
+            }
+        }
+        return null;
+    }
+
+    @Test
     void unknownComponentPreservesFlowAndStep() throws Exception {
         // QA finding 6: the dispatch fallthrough used to reset to a fresh flow,
         // silently destroying the agent's typed work on an unexpected component id.

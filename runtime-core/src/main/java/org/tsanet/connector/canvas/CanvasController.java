@@ -222,10 +222,15 @@ public class CanvasController {
         components.add(CanvasKit.textarea("description", "Problem description (required)", "What happened, impact, versions",
                 state.values().get("description")));
         for (FormField field : form.fields()) {
+            if (!field.rendered()) {
+                continue; // HIDDEN rides the form template server-side, never the canvas
+            }
             String id = "f_" + field.fieldId();
             String label = field.label() + (field.required() ? " (required)" : "");
-            if ("SELECT".equalsIgnoreCase(field.type())) {
+            if (field.selectShaped()) {
                 components.add(CanvasKit.singleSelect(id, label, field.options(), state.values().get(id)));
+            } else if (field.textareaShaped()) {
+                components.add(CanvasKit.textarea(id, label, null, state.values().get(id)));
             } else {
                 components.add(CanvasKit.input(id, label, null, state.values().get(id)));
             }
@@ -263,7 +268,10 @@ public class CanvasController {
                     missing.add("Problem description");
                 }
                 for (FormField field : state.form().fields()) {
-                    if (field.required() && blank(state.values().get("f_" + field.fieldId()))) {
+                    // Only rendered fields can be typed; a required HIDDEN field is
+                    // the form template's job, not the agent's.
+                    if (field.rendered() && field.required()
+                            && blank(state.values().get("f_" + field.fieldId()))) {
                         missing.add(field.label());
                     }
                 }
