@@ -25,5 +25,18 @@
       <artifactId>connect-library</artifactId>
       <version>${connect-library.version}</version>
     </dependency>
+    <dependency>
+      <!-- The shared gateway contract test (runtime-core test-jar). -->
+      <groupId>org.tsanet.connector</groupId>
+      <artifactId>runtime-core</artifactId>
+      <version>${project.version}</version>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 </project>
