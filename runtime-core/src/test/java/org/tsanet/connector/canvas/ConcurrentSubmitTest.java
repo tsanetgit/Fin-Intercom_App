@@ -61,10 +61,18 @@ class ConcurrentSubmitTest {
     /** Gateway whose submit parks until released, making the race window explicit. */
     static final class BlockingGateway implements TsanetGateway {
 
-        final CountDownLatch entered = new CountDownLatch(1);
-        final CountDownLatch release = new CountDownLatch(1);
+        volatile CountDownLatch entered = new CountDownLatch(1);
+        volatile CountDownLatch release = new CountDownLatch(1);
         final AtomicInteger submits = new AtomicInteger();
         private final Map<String, SubmissionResult> store = new ConcurrentHashMap<>();
+
+        /** Fresh latches per test; the Spring context (and this bean) is shared. */
+        void reset() {
+            entered = new CountDownLatch(1);
+            release = new CountDownLatch(1);
+            submits.set(0);
+            store.clear();
+        }
 
         @Override
         public boolean healthy() {
@@ -111,6 +119,11 @@ class ConcurrentSubmitTest {
     @Autowired
     private BlockingGateway gateway;
 
+    @org.junit.jupiter.api.BeforeEach
+    void resetGateway() {
+        gateway.reset();
+    }
+
     private static String sign(byte[] body) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec("test-intercom-secret".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
@@ -155,6 +168,39 @@ class ConcurrentSubmitTest {
             assertTrue(second.contains("Submission in progress"),
                     "the losing view must be told a submit is in flight, not submit again");
             assertEquals(1, gateway.submits.get(), "only the claim winner may call gateway.submit");
+
+            gateway.release.countDown();
+            assertTrue(first.get(10, TimeUnit.SECONDS).contains("Case submitted"));
+            assertEquals(1, gateway.submits.get());
+        } finally {
+            gateway.release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void checkStatusWhileSubmittingDoesNotReArmRetry() throws Exception {
+        // reconcileNotFound must no-op while the original call is in flight: an empty
+        // lookup mid-submit proves nothing and must not unlock a second submit.
+        String home = post("/canvas/initialize", "{\"workspace_id\":\"w1\"}");
+        String flow = home.replaceAll("(?s).*\"flow_id\":\"([^\"]+)\".*", "$1");
+        post("/canvas/submit", submitBody(flow, "search", "{\"q\":\"latch\"}"));
+        post("/canvas/submit", submitBody(flow, "select:0", "{}"));
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> first = pool.submit(() -> post("/canvas/submit",
+                    submitBody(flow, "submit_case", "{\"summary\":\"s\",\"description\":\"d\"}")));
+            assertTrue(gateway.entered.await(10, TimeUnit.SECONDS), "first submit must reach the gateway");
+
+            String lookup = post("/canvas/submit", submitBody(flow, "check_status", "{}"));
+            assertTrue(lookup.contains("Submission in progress"),
+                    "an empty lookup mid-flight must report in-progress, not re-arm");
+
+            String retry = post("/canvas/submit", submitBody(flow, "retry_submit", "{}"));
+            assertTrue(retry.contains("Submission in progress"),
+                    "retry after the mid-flight lookup must still be blocked");
+            assertEquals(1, gateway.submits.get());
 
             gateway.release.countDown();
             assertTrue(first.get(10, TimeUnit.SECONDS).contains("Case submitted"));

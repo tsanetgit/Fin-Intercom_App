@@ -38,7 +38,17 @@ public interface TsanetGateway {
      */
     ProcessForm form(PartnerHit partner);
 
-    /** Create the collaboration case. NOT idempotent; see class javadoc. */
+    /**
+     * Create the collaboration case. NOT idempotent; see class javadoc.
+     *
+     * <p>Exception contract: throw plain {@link GatewayException} ONLY when the API
+     * definitively rejected the request before a case could exist (a parsed 400/401
+     * validation or auth failure) — the flow treats that as safe to edit and resubmit.
+     * Every ambiguous outcome (deadline expiry, connection reset mid-response, 5xx
+     * after the request was sent) MUST surface as {@link GatewayTimeoutException} so
+     * the flow parks UNRESOLVED and reconciles by lookup; mapping ambiguity to plain
+     * GatewayException re-arms submit and reopens the duplicate-case window.
+     */
     SubmissionResult submit(SubmissionDraft draft);
 
     /** Reconcile a possibly-successful submission by its internalCaseNumber. */

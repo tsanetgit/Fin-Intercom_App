@@ -42,12 +42,20 @@ the flow UNRESOLVED, the UNRESOLVED -> DRAFT transition on a lookup that found n
 is the server-side marker that re-arms retry (client-supplied component ids are never
 trusted for this), and an empty lookup cannot prove the original request is not still
 in flight — that residual duplicate window is accepted and named in the agent-facing
-copy. Timeout rate gets a counter the day the SDK gateway lands (the fake is instant,
-so there is nothing to measure before then); the counter validates the 1500ms figure
-against real BETA partners. Anything heavier than one bounded call still goes through
-the event queue. Deadline enforcement is an SDK-gateway (slice 2) obligation verified
-by that module's own deadline tests; the shared contract test covers timeout-reconcile
-semantics via the injectable fake, not wall-clock budgets.
+copy. The same taxonomy binds every gateway implementation (enforced by
+`TsanetGateway.submit`'s javadoc contract): plain GatewayException means
+definitively-rejected-before-create and re-arms editing; every ambiguous outcome
+(deadline expiry, reset mid-response, 5xx after send) must surface as
+GatewayTimeoutException and park the flow UNRESOLVED. SUBMITTING/UNRESOLVED flows are
+exempt from store eviction and TTL expiry — severing one orphans the case — so the
+reconcile window is bounded only by process lifetime; in-memory state is a D7 non-goal
+until Phase 1-2 persistence. Timeout rate gets a counter the day the SDK gateway lands
+(the fake is instant, so there is nothing to measure before then); the counter
+validates the 1500ms figure against real BETA partners. Anything heavier than one
+bounded call still goes through the event queue. Deadline enforcement is an SDK-gateway
+(slice 2) obligation verified by that module's own deadline tests; the shared contract
+test covers timeout-reconcile semantics via the injectable fake, not wall-clock
+budgets.
 
 ## D3. Verify effects; never trust a bare 200 (Intercom API)
 

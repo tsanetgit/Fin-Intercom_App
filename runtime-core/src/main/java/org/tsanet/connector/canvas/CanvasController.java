@@ -202,6 +202,8 @@ public class CanvasController {
             return home(flows.create(), surface(payload), "That panel session lost its form; starting over.");
         }
         if (!retry) {
+            // Concurrent losers may interleave this putAll before losing the claim
+            // below; same agent, same form, so mixed values are equivalent, not corrupt.
             state.values().putAll(inputs);
         }
         List<String> missing = new ArrayList<>();
@@ -230,9 +232,13 @@ public class CanvasController {
             state.landed(result);
             return confirmation(state);
         } catch (GatewayTimeoutException e) {
+            // If a concurrent lookup landed the flow first, this renders one stale
+            // pending canvas; the next click self-corrects via renderByStatus.
             state.submitUnresolved();
             return pendingCanvas(state);
         } catch (GatewayException e) {
+            // Per TsanetGateway.submit's contract, reaching here means the API
+            // definitively rejected the request before a case could exist.
             state.submitFailed();
             return formCanvas(state, "Submission failed (" + e.getMessage() + "); fix and resubmit.");
         }
