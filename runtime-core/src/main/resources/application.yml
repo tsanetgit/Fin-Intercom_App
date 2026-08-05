@@ -19,6 +19,13 @@ connector:
       # test-submission defaults TRUE: real partner cases are a per-deployment opt-in
       # at pilot time (the upstream facade hardcodes true - connect-sdk-demo#6).
       test-submission: ${TSANET_TEST_SUBMISSION:true}
+  # fake = fixture Intercom gateway (dev/test); rest = real Intercom API (annotation
+  # pipeline). The fake refuses the prod profile; rest mode fails fast without a token.
+  intercom:
+    mode: fake
+    access-token: ${INTERCOM_ACCESS_TOKEN:${INTERCOM_DEV_ACCESS_TOKEN:}}
+    admin-id: ${INTERCOM_ADMIN_ID:}   # blank = resolved once via GET /me at wiring
+    api-base-url: https://api.intercom.io
   # Empty secrets fail closed (401) on the signed endpoints; /healthz stays open.
   intercom-client-secret: ${INTERCOM_DEV_CLIENT_SECRET:}
   tsanet-webhook-secret: ${TSANET_WEBHOOK_SECRET:${TSANET_BETA_WEBHOOK_SECRET:}}
