@@ -2,6 +2,8 @@ package org.tsanet.connector.canvas;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -42,6 +44,26 @@ class FlowStateStoreTest {
     }
 
     @Test
+    void protectedEldestDoesNotJamEvictionForOthers() {
+        // tsanetgit/Fin-Intercom_App#3: removeEldestEntry only ever consulted THE
+        // eldest, so one abandoned UNRESOLVED flow at the LRU end disabled eviction
+        // entirely (QA probe: an early DRAFT survived 2000 inserts over capacity).
+        // Eviction must walk PAST protected flows, not stop at them.
+        FlowStateStore store = new FlowStateStore();
+        OutboundFlowState unresolved = store.create(); // eldest, protected
+        unresolved.beginSubmit();
+        unresolved.submitUnresolved();
+        OutboundFlowState draft = store.create(); // second-eldest, evictable
+        for (int i = 0; i < OVER_CAPACITY; i++) {
+            store.create();
+        }
+        assertNull(store.find(draft.flowId()),
+                "a protected eldest must not disable eviction for evictable flows behind it");
+        assertNotNull(store.find(unresolved.flowId()),
+                "the protected flow itself still survives");
+    }
+
+    @Test
     void ttlExpiresDraftButNeverUnresolvedFlows() {
         MutableClock clock = new MutableClock(Instant.parse("2026-08-05T00:00:00Z"));
         FlowStateStore store = new FlowStateStore(clock);
@@ -56,6 +78,45 @@ class FlowStateStoreTest {
         assertNull(store.find(draft.flowId()), "an idle DRAFT flow expires normally");
         assertNotNull(store.find(unresolved.flowId()),
                 "the TTL must not sever the reconcile key of an unresolved submission");
+    }
+
+    @Test
+    void storeOperationsProceedWhileAFlowMonitorIsHeld() throws Exception {
+        // QA round-3 deadlock: find()/create() used to read status() through a
+        // synchronized accessor while holding the STORE monitor, forming a
+        // store->state lock edge that opposed the controller's state->store edge and
+        // wedged the whole connector. status() is now a lock-free volatile read; this
+        // pins it by driving the TTL and eviction paths while another thread holds
+        // the flow's monitor.
+        MutableClock clock = new MutableClock(Instant.parse("2026-08-05T00:00:00Z"));
+        FlowStateStore store = new FlowStateStore(clock);
+        OutboundFlowState held = store.create();
+        clock.advance(Duration.ofMinutes(31)); // find() reaches the evictable() TTL branch
+        java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            synchronized (held) {
+                locked.countDown();
+                try {
+                    release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+        holder.start();
+        assertTrue(locked.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        try {
+            assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
+                assertNull(store.find(held.flowId()), "TTL expiry must not require the flow monitor");
+                for (int i = 0; i < OVER_CAPACITY; i++) {
+                    store.create(); // eviction path likewise
+                }
+            });
+        } finally {
+            release.countDown();
+            holder.join(5_000);
+        }
     }
 
     private static final class MutableClock extends Clock {

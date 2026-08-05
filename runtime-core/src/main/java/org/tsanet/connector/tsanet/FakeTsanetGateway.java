@@ -111,10 +111,20 @@ public class FakeTsanetGateway implements TsanetGateway {
         return Optional.ofNullable(submitted.get(internalCaseNumber));
     }
 
-    private static final List<PartnerHit> FIXTURE_PARTNERS = List.of(
-            new PartnerHit("NetApp | Storage Division", "NetApp", "Storage Division", "1042", "512"),
-            new PartnerHit("NetApp | Cloud", "NetApp", "Cloud", "1042", "513"),
-            new PartnerHit("SDK Two Co", "SDK Two Co", null, "1157", null),
-            new PartnerHit("Broken Forms Inc", "Broken Forms Inc", "Support", "2000", "999"),
-            new PartnerHit("Unsupported Co", "Unsupported Co", "Files Dept", "2100", "777"));
+    private static final List<PartnerHit> FIXTURE_PARTNERS = buildFixtures();
+
+    private static List<PartnerHit> buildFixtures() {
+        List<PartnerHit> partners = new java.util.ArrayList<>(List.of(
+                new PartnerHit("NetApp | Storage Division", "NetApp", "Storage Division", "1042", "512"),
+                new PartnerHit("NetApp | Cloud", "NetApp", "Cloud", "1042", "513"),
+                new PartnerHit("SDK Two Co", "SDK Two Co", null, "1157", null),
+                new PartnerHit("Broken Forms Inc", "Broken Forms Inc", "Support", "2000", "999"),
+                new PartnerHit("Unsupported Co", "Unsupported Co", "Files Dept", "2100", "777")));
+        // "capacity" matches 15 partners: exercises the results cap (12) in tests.
+        for (int i = 1; i <= 15; i++) {
+            partners.add(new PartnerHit("Capacity Test " + i, "Capacity Test " + i, null,
+                    String.valueOf(3000 + i), null));
+        }
+        return List.copyOf(partners);
+    }
 }

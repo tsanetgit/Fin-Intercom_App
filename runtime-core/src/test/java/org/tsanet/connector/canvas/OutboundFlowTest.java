@@ -111,11 +111,13 @@ class OutboundFlowTest {
         assertEquals(flow, flowId(results), "flow pointer must survive search");
         assertTrue(allText(results).contains("NetApp | Storage Division"));
 
-        JsonNode form = submit(flow, "select:0", "{}");
+        JsonNode form = submit(flow, "select:1042|512", "{}");
         assertEquals(flow, flowId(form), "flow pointer must survive selection");
         String formText = allText(form);
         assertTrue(formText.contains("Serial Number"));
         assertTrue(formText.contains("Partner note:"));
+        assertTrue(formText.contains("Escalation: Call the duty manager for P1s."),
+                "partner-supplied escalation guidance must render, not be fetched and dropped");
 
         JsonNode invalid = submit(flow, "submit_case", "{\"summary\":\"\",\"description\":\"broken volume\"}");
         assertTrue(allText(invalid).contains("Missing required:"));
@@ -133,7 +135,7 @@ class OutboundFlowTest {
     void submitTimeoutReconcilesWithoutDuplicate() throws Exception {
         String flow = flowId(initialize());
         submit(flow, "search", "{\"q\":\"netapp\"}");
-        submit(flow, "select:0", "{}");
+        submit(flow, "select:1042|512", "{}");
 
         JsonNode pending = submit(flow, "submit_case",
                 "{\"summary\":\"please timeout now\",\"description\":\"desc\",\"f_88\":\"SN-2\",\"f_89\":\"Low\"}");
@@ -155,7 +157,7 @@ class OutboundFlowTest {
     void duplicateSubmitRendersTheSameTokenInsteadOfASecondCase() throws Exception {
         String flow = flowId(initialize());
         submit(flow, "search", "{\"q\":\"netapp\"}");
-        submit(flow, "select:0", "{}");
+        submit(flow, "select:1042|512", "{}");
         String first = allText(submit(flow, "submit_case",
                 "{\"summary\":\"Latency spike\",\"description\":\"desc\",\"f_88\":\"SN-3\",\"f_89\":\"High\"}"));
         assertTrue(first.contains("Case submitted"));
@@ -174,7 +176,7 @@ class OutboundFlowTest {
     void unsupportedFormFailsLoudly() throws Exception {
         String flow = flowId(initialize());
         submit(flow, "search", "{\"q\":\"unsupported\"}");
-        JsonNode blocked = submit(flow, "select:0", "{}");
+        JsonNode blocked = submit(flow, "select:2100|777", "{}");
         String text = allText(blocked);
         assertTrue(text.contains("doesn't support yet"));
         assertTrue(text.contains("FILES"));
@@ -204,7 +206,7 @@ class OutboundFlowTest {
         // client-supplied component id to prove a reconcile happened.
         String flow = flowId(initialize());
         submit(flow, "search", "{\"q\":\"netapp\"}");
-        submit(flow, "select:0", "{}");
+        submit(flow, "select:1042|512", "{}");
         submit(flow, "submit_case",
                 "{\"summary\":\"please timeout now\",\"description\":\"desc\",\"f_88\":\"SN-4\",\"f_89\":\"Low\"}");
         String tokenBefore = gateway.findSubmission(flow).orElseThrow().token();
@@ -222,7 +224,7 @@ class OutboundFlowTest {
         // severing the only key that can ever reconcile the possibly-created case.
         String flow = flowId(initialize());
         submit(flow, "search", "{\"q\":\"netapp\"}");
-        submit(flow, "select:0", "{}");
+        submit(flow, "select:1042|512", "{}");
         submit(flow, "submit_case",
                 "{\"summary\":\"please timeout now\",\"description\":\"desc\",\"f_88\":\"SN-5\",\"f_89\":\"Low\"}");
 
@@ -242,7 +244,7 @@ class OutboundFlowTest {
         // as the UNRESOLVED -> DRAFT transition) re-arms submission for this flow.
         String flow = flowId(initialize());
         submit(flow, "search", "{\"q\":\"netapp\"}");
-        submit(flow, "select:0", "{}");
+        submit(flow, "select:1042|512", "{}");
         submit(flow, "submit_case",
                 "{\"summary\":\"please timeout-lost now\",\"description\":\"desc\",\"f_88\":\"SN-6\",\"f_89\":\"Low\"}");
         assertTrue(gateway.findSubmission(flow).isEmpty(), "the lost request must not have recorded a case");
@@ -269,10 +271,10 @@ class OutboundFlowTest {
         // share field ids (88/89/90), which is exactly the dangerous case.
         String flow = flowId(initialize());
         submit(flow, "search", "{\"q\":\"netapp\"}");
-        submit(flow, "select:0", "{}");
+        submit(flow, "select:1042|512", "{}");
         submit(flow, "submit_case", "{\"summary\":\"\",\"description\":\"\",\"f_88\":\"STALE-SERIAL\"}");
 
-        JsonNode secondForm = submit(flow, "select:1", "{}");
+        JsonNode secondForm = submit(flow, "select:1042|513", "{}");
         assertEquals(null, componentValue(secondForm, "f_88"),
                 "a different partner's form must not pre-fill with the old form's values");
 
@@ -286,12 +288,41 @@ class OutboundFlowTest {
     }
 
     @Test
+    void staleSelectionKeyReRendersCurrentResults() throws Exception {
+        // Selection is by partner identity, not list index: a key absent from the
+        // CURRENT results (stale canvas in another view, or a fabricated id) must
+        // re-render the live list, never select a different partner or dead-end.
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        JsonNode rendered = submit(flow, "select:9999|1", "{}");
+        assertEquals(flow, flowId(rendered));
+        String text = allText(rendered);
+        assertTrue(text.contains("no longer in the results"));
+        assertTrue(text.contains("NetApp | Storage Division"), "current results must re-render");
+    }
+
+    @Test
+    void oversizedResultListIsCappedWithARefineNotice() throws Exception {
+        String flow = flowId(initialize());
+        JsonNode results = submit(flow, "search", "{\"q\":\"capacity\"}");
+        long buttons = 0;
+        for (Iterator<JsonNode> it = results.at("/canvas/content/components").elements(); it.hasNext(); ) {
+            JsonNode component = it.next();
+            if (component.has("id") && component.get("id").asText().startsWith("select:")) {
+                buttons++;
+            }
+        }
+        assertEquals(12, buttons, "the canvas payload budget caps rendered results");
+        assertTrue(allText(results).contains("refine your search"));
+    }
+
+    @Test
     void unknownComponentPreservesFlowAndStep() throws Exception {
         // QA finding 6: the dispatch fallthrough used to reset to a fresh flow,
         // silently destroying the agent's typed work on an unexpected component id.
         String flow = flowId(initialize());
         submit(flow, "search", "{\"q\":\"netapp\"}");
-        submit(flow, "select:0", "{}");
+        submit(flow, "select:1042|512", "{}");
 
         JsonNode rendered = submit(flow, "bogus_component_zzz", "{}");
         assertEquals(flow, flowId(rendered), "an unknown component must not reset the flow");

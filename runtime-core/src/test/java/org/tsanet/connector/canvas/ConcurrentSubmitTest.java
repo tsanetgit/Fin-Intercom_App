@@ -155,7 +155,7 @@ class ConcurrentSubmitTest {
         String home = post("/canvas/initialize", "{\"workspace_id\":\"w1\"}");
         String flow = home.replaceAll("(?s).*\"flow_id\":\"([^\"]+)\".*", "$1");
         post("/canvas/submit", submitBody(flow, "search", "{\"q\":\"latch\"}"));
-        post("/canvas/submit", submitBody(flow, "select:0", "{}"));
+        post("/canvas/submit", submitBody(flow, "select:42|512", "{}"));
 
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {
@@ -185,7 +185,7 @@ class ConcurrentSubmitTest {
         String home = post("/canvas/initialize", "{\"workspace_id\":\"w1\"}");
         String flow = home.replaceAll("(?s).*\"flow_id\":\"([^\"]+)\".*", "$1");
         post("/canvas/submit", submitBody(flow, "search", "{\"q\":\"latch\"}"));
-        post("/canvas/submit", submitBody(flow, "select:0", "{}"));
+        post("/canvas/submit", submitBody(flow, "select:42|512", "{}"));
 
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {

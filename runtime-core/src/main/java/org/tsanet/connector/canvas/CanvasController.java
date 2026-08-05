@@ -6,6 +6,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -32,6 +34,8 @@ import org.tsanet.connector.tsanet.dto.SubmissionResult;
  */
 @RestController
 public class CanvasController {
+
+    private static final Logger log = LoggerFactory.getLogger(CanvasController.class);
 
     private final FlowStateStore flows;
     private final TsanetGateway gateway;
@@ -67,7 +71,7 @@ public class CanvasController {
             return home(flows.create(), surface, null);
         }
         if ("check_status".equals(component)) {
-            return doCheckStatus(state);
+            return doCheckStatus(state, surface);
         }
         if (state.status() != Status.DRAFT) {
             // Search/select/submit from a stale view of a flow whose submission is in
@@ -78,7 +82,7 @@ public class CanvasController {
             return doSearch(state, surface, inputs.getOrDefault("q", "").trim());
         }
         if (component.startsWith("select:")) {
-            return doSelect(state, component.substring("select:".length()));
+            return doSelect(state, surface, component.substring("select:".length()));
         }
         if ("submit_case".equals(component) || "retry_submit".equals(component)) {
             return doSubmit(state, payload, inputs, "retry_submit".equals(component));
@@ -107,6 +111,9 @@ public class CanvasController {
         return resultsCanvas(state, hits.size() + " result(s) for \"" + query + "\"");
     }
 
+    /** Payload-size guard (D8's motivation): more hits than this asks for a narrower search. */
+    private static final int MAX_RESULT_BUTTONS = 12;
+
     private Map<String, Object> resultsCanvas(OutboundFlowState state, String subtitle) {
         List<Map<String, Object>> components = new ArrayList<>();
         components.add(CanvasKit.header("Select a partner"));
@@ -114,30 +121,45 @@ public class CanvasController {
             components.add(CanvasKit.muted(subtitle));
         }
         List<PartnerHit> hits = state.hits();
-        for (int i = 0; i < hits.size(); i++) {
-            components.add(CanvasKit.button("select:" + i, hits.get(i).display()));
+        // Buttons carry the partner's identity (companyId|departmentId), not a list
+        // index: a stale results canvas in another view can never select a DIFFERENT
+        // partner than the label that was clicked (QA round-1 regression note).
+        int shown = Math.min(hits.size(), MAX_RESULT_BUTTONS);
+        for (int i = 0; i < shown; i++) {
+            PartnerHit hit = hits.get(i);
+            components.add(CanvasKit.button("select:" + contentKey(hit), hit.display()));
+        }
+        if (hits.size() > shown) {
+            components.add(CanvasKit.muted("Showing the first " + shown + " of " + hits.size()
+                    + " matches; refine your search to see the rest."));
         }
         components.add(CanvasKit.divider());
         components.add(CanvasKit.button("back_home", "Start over"));
         return CanvasKit.canvas(components, pointer(state));
     }
 
-    private Map<String, Object> doSelect(OutboundFlowState state, String indexRaw) {
-        int index;
-        try {
-            index = Integer.parseInt(indexRaw);
-        } catch (NumberFormatException e) {
-            index = -1;
+    private static String contentKey(PartnerHit hit) {
+        return hit.companyId() + "|" + (hit.departmentId() == null ? "" : hit.departmentId());
+    }
+
+    private Map<String, Object> doSelect(OutboundFlowState state, String surface, String key) {
+        PartnerHit partner = state.hits().stream()
+                .filter(hit -> contentKey(hit).equals(key))
+                .findFirst()
+                .orElse(null);
+        if (partner == null) {
+            // Wrong-but-well-formed input: a syntactically valid key that is not in
+            // the CURRENT list (stale canvas, or a fabricated id). Re-render the
+            // current results rather than acting or dead-ending.
+            return state.hits().isEmpty()
+                    ? home(state, surface, "That selection is no longer valid; search again.")
+                    : resultsCanvas(state, "That selection is no longer in the results; pick from the current list.");
         }
-        if (index < 0 || index >= state.hits().size()) {
-            return home(state, "conversation", "That selection is no longer valid; search again.");
-        }
-        PartnerHit partner = state.hits().get(index);
         ProcessForm form;
         try {
             form = gateway.form(partner);
         } catch (GatewayException e) {
-            return home(state, "conversation",
+            return home(state, surface,
                     "Couldn't load the form for " + partner.display() + " (" + e.getMessage() + "); try again.");
         }
         List<FormField> unsupported = form.unsupportedFields();
@@ -152,15 +174,19 @@ public class CanvasController {
                             + " case can be submitted via the TSANet web app."),
                     CanvasKit.button("back_home", "Start over")), pointer(state));
         }
-        PartnerHit previous = state.partner();
-        if (previous == null || !sameTarget(previous, partner)) {
-            // A different partner means a different process form; values typed for the
-            // old form must not pre-fill (or ride into a submission against) the new one.
-            state.clearFieldValues();
+        synchronized (state) {
+            PartnerHit previous = state.partner();
+            if (previous == null || !sameTarget(previous, partner)) {
+                // A different partner means a different process form; values typed for
+                // the old form must not pre-fill (or ride into a submission against)
+                // the new one.
+                state.clearFieldValues();
+            }
+            // Set as a pair under the monitor: form must always match partner.
+            state.partner(partner);
+            state.form(form);
+            return formCanvas(state, null);
         }
-        state.partner(partner);
-        state.form(form);
-        return formCanvas(state, null);
     }
 
     private static boolean sameTarget(PartnerHit a, PartnerHit b) {
@@ -177,6 +203,9 @@ public class CanvasController {
         }
         if (form.adminNote() != null && !form.adminNote().isBlank()) {
             components.add(CanvasKit.muted("Partner note: " + form.adminNote()));
+        }
+        if (form.escalationInstructions() != null && !form.escalationInstructions().isBlank()) {
+            components.add(CanvasKit.muted("Escalation: " + form.escalationInstructions()));
         }
         components.add(CanvasKit.input("summary", "Problem summary (required)", "One line", state.values().get("summary")));
         components.add(CanvasKit.textarea("description", "Problem description (required)", "What happened, impact, versions",
@@ -198,35 +227,52 @@ public class CanvasController {
 
     private Map<String, Object> doSubmit(OutboundFlowState state, Map<String, Object> payload,
             Map<String, String> inputs, boolean retry) {
-        if (state.form() == null || state.partner() == null) {
-            return home(flows.create(), surface(payload), "That panel session lost its form; starting over.");
-        }
-        if (!retry) {
-            // Concurrent losers may interleave this putAll before losing the claim
-            // below; same agent, same form, so mixed values are equivalent, not corrupt.
-            state.values().putAll(inputs);
-        }
-        List<String> missing = new ArrayList<>();
-        if (blank(state.values().get("summary"))) {
-            missing.add("Problem summary");
-        }
-        if (blank(state.values().get("description"))) {
-            missing.add("Problem description");
-        }
-        for (FormField field : state.form().fields()) {
-            if (field.required() && blank(state.values().get("f_" + field.fieldId()))) {
-                missing.add(field.label());
+        SubmissionDraft draft = null;
+        Map<String, Object> renderedUnderLock = null;
+        boolean lostForm = false;
+        // One monitor section covers merge -> validate -> claim -> snapshot, so a
+        // concurrent select cannot swap the form between validation and the draft, and
+        // no value can arrive after validation has read them (QA round-2 lock-scope
+        // note). The gateway call stays outside the lock; contention is per-flow.
+        // NO store call may run in here: flows.create()/find() hold the STORE monitor,
+        // and opposing acquisition orders are a connector-wide deadlock (QA round-3) —
+        // so the lost-form restart is only DECIDED here and minted after release.
+        synchronized (state) {
+            if (state.form() == null || state.partner() == null) {
+                lostForm = true;
+            } else {
+                if (!retry) {
+                    state.values().putAll(inputs);
+                }
+                List<String> missing = new ArrayList<>();
+                if (blank(state.values().get("summary"))) {
+                    missing.add("Problem summary");
+                }
+                if (blank(state.values().get("description"))) {
+                    missing.add("Problem description");
+                }
+                for (FormField field : state.form().fields()) {
+                    if (field.required() && blank(state.values().get("f_" + field.fieldId()))) {
+                        missing.add(field.label());
+                    }
+                }
+                if (!missing.isEmpty()) {
+                    renderedUnderLock = formCanvas(state, "Missing required: " + String.join(", ", missing));
+                } else if (!state.beginSubmit()) {
+                    // The one legal submit is claiming DRAFT -> SUBMITTING; losing the
+                    // claim means another view already submitted (or the outcome is known).
+                    renderedUnderLock = renderByStatus(state, surface(payload), null);
+                } else {
+                    draft = draftFrom(state, payload);
+                }
             }
         }
-        if (!missing.isEmpty()) {
-            return formCanvas(state, "Missing required: " + String.join(", ", missing));
+        if (lostForm) {
+            return home(flows.create(), surface(payload), "That panel session lost its form; starting over.");
         }
-        // The one legal submit is claiming DRAFT -> SUBMITTING; losing the claim means
-        // another view already submitted (or the outcome is known): render, don't act.
-        if (!state.beginSubmit()) {
-            return renderByStatus(state, surface(payload), null);
+        if (renderedUnderLock != null) {
+            return renderedUnderLock;
         }
-        SubmissionDraft draft = draftFrom(state, payload);
         try {
             SubmissionResult result = gateway.submit(draft);
             state.landed(result);
@@ -241,6 +287,15 @@ public class CanvasController {
             // definitively rejected the request before a case could exist.
             state.submitFailed();
             return formCanvas(state, "Submission failed (" + e.getMessage() + "); fix and resubmit.");
+        } catch (RuntimeException e) {
+            // tsanetgit/Fin-Intercom_App#2: an exception outside the gateway taxonomy
+            // is by definition an ambiguous outcome (the taxonomy's own rule). Without
+            // this, the flow stays SUBMITTING forever — a state whose only exit needs a
+            // lookup to FIND a case — and the panel is dead for the conversation.
+            log.error("gateway.submit threw outside the taxonomy; treating as ambiguous (flow {})",
+                    state.flowId(), e);
+            state.submitUnresolved();
+            return pendingCanvas(state);
         }
     }
 
@@ -272,7 +327,7 @@ public class CanvasController {
                 CanvasKit.button("back_home", "Start over")), pointer(state));
     }
 
-    private Map<String, Object> doCheckStatus(OutboundFlowState state) {
+    private Map<String, Object> doCheckStatus(OutboundFlowState state, String surface) {
         if (state.status() == Status.LANDED) {
             return confirmation(state);
         }
@@ -289,8 +344,12 @@ public class CanvasController {
                         return switch (state.status()) {
                             case LANDED -> confirmation(state);
                             case SUBMITTING -> inProgressCanvas(state);
-                            // DRAFT: an earlier lookup already re-armed retry.
-                            default -> notFoundCanvas(state);
+                            // DRAFT here means no submit ever ran, or an earlier lookup
+                            // already re-armed: render the current step with a neutral
+                            // truth, never copy that invites a "retry" that would be a
+                            // FIRST submission (QA round-2 note).
+                            default -> renderByStatus(state, surface,
+                                    "No case exists for this flow yet.");
                         };
                     });
         } catch (GatewayException e) {

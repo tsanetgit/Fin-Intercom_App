@@ -25,5 +25,42 @@
       <artifactId>connect-library</artifactId>
       <version>${connect-library.version}</version>
     </dependency>
+    <dependency>
+      <!-- The shared gateway contract test (runtime-core test-jar). -->
+      <groupId>org.tsanet.connector</groupId>
+      <artifactId>runtime-core</artifactId>
+      <version>${project.version}</version>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <!-- The sdk-mode RUNNABLE artifact: runtime-core's exec jar alone cannot carry
+             this module (the dependency points the other way), so the deployable jar
+             for connector.tsanet.mode=sdk is built HERE - runtime-core + connect-library
+             + this configuration, launching the same ConnectorApplication. -->
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <classifier>exec</classifier>
+          <mainClass>org.tsanet.connector.ConnectorApplication</mainClass>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>

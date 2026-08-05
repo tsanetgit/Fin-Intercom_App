@@ -37,6 +37,19 @@
           <classifier>exec</classifier>
         </configuration>
       </plugin>
+      <plugin>
+        <!-- Publishes the test classes as a test-jar so connect-gateway's SDK gateway
+             can extend TsanetGatewayContractTest (the shared gateway contract). -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>test-jar</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
 </project>

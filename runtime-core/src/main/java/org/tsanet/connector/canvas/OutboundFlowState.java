@@ -38,7 +38,12 @@ public final class OutboundFlowState {
     private ProcessForm form;
     private final Map<String, String> values = new ConcurrentHashMap<>();
     private SubmissionResult result;
-    private Status status = Status.DRAFT;
+    // volatile so status can be READ without the flow monitor: FlowStateStore's
+    // eviction/TTL checks run under the STORE monitor, and taking per-flow locks
+    // there is one half of a lock-order inversion (QA round-3 deadlock probe; the
+    // other half is never calling into the store while holding a flow monitor).
+    // Writes still happen only inside synchronized transition methods.
+    private volatile Status status = Status.DRAFT;
 
     OutboundFlowState(String flowId) {
         this.flowId = flowId;
@@ -48,27 +53,27 @@ public final class OutboundFlowState {
         return flowId;
     }
 
-    public List<PartnerHit> hits() {
+    public synchronized List<PartnerHit> hits() {
         return hits;
     }
 
-    public void hits(List<PartnerHit> hits) {
+    public synchronized void hits(List<PartnerHit> hits) {
         this.hits = List.copyOf(hits);
     }
 
-    public PartnerHit partner() {
+    public synchronized PartnerHit partner() {
         return partner;
     }
 
-    public void partner(PartnerHit partner) {
+    public synchronized void partner(PartnerHit partner) {
         this.partner = partner;
     }
 
-    public ProcessForm form() {
+    public synchronized ProcessForm form() {
         return form;
     }
 
-    public void form(ProcessForm form) {
+    public synchronized void form(ProcessForm form) {
         this.form = form;
     }
 
@@ -77,15 +82,16 @@ public final class OutboundFlowState {
     }
 
     /** Drops form-field values (keys {@code f_*}); summary/description survive a partner change. */
-    public void clearFieldValues() {
+    public synchronized void clearFieldValues() {
         values.keySet().removeIf(k -> k.startsWith("f_"));
     }
 
-    public SubmissionResult result() {
+    public synchronized SubmissionResult result() {
         return result;
     }
 
-    public synchronized Status status() {
+    /** Lock-free on purpose (volatile read) — safe under the store monitor. */
+    public Status status() {
         return status;
     }
 
