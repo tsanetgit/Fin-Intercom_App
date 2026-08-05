@@ -213,18 +213,32 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
 
     private CollaborationRequestDTO fetchForm(PartnerHit partner) {
         if (partner.departmentId() != null && !partner.departmentId().isBlank()) {
-            return forms.getFormByDepartmentId(Long.valueOf(partner.departmentId()));
+            return forms.getFormByDepartmentId(parseId(partner.departmentId(), "department id"));
         }
-        return forms.getFormByCompanyId(Long.valueOf(partner.companyId()));
+        return forms.getFormByCompanyId(parseId(partner.companyId(), "company id"));
+    }
+
+    /**
+     * Ids are parsed BEFORE any network call: a malformed id is a definitive
+     * client-side failure, and on submit it must never masquerade as an ambiguous
+     * outcome that parks the flow UNRESOLVED for a create that was never attempted.
+     */
+    private static long parseId(String raw, String what) {
+        try {
+            return Long.parseLong(raw);
+        } catch (RuntimeException e) {
+            throw new GatewayException("Invalid " + what + " on this selection; search again and reselect");
+        }
     }
 
     @Override
     public SubmissionResult submit(SubmissionDraft draft) {
+        long documentId = parseId(draft.documentId(), "form reference (documentId)");
         CollaborationRequestStatusDTO created = bounded("submit", config.submitDeadlineMillis(), () -> {
             // Re-fetched fresh by documentId, exactly like the SDK facade does: the
             // form IS the create request body, and staleness belongs to the server's
             // validation, not to a cache here. Both round trips share the 4000ms budget.
-            CollaborationRequestDTO form = forms.getFormByDocumentId(Long.valueOf(draft.documentId()));
+            CollaborationRequestDTO form = forms.getFormByDocumentId(documentId);
             applyDraft(form, draft);
             return collaborations.createCollaborationRequest(form);
         });

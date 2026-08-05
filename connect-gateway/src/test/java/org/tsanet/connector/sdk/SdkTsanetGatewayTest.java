@@ -351,6 +351,19 @@ class SdkTsanetGatewayTest {
     }
 
     @Test
+    void malformedDocumentIdIsDefinitiveNotAmbiguous() {
+        // No network call is ever attempted for a bad id, so it must NOT park the
+        // flow UNRESOLVED (gate finding: a phantom-duplicate risk for a create that
+        // never happened).
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        GatewayException e = assertThrows(GatewayException.class,
+                () -> gateway.submit(new SubmissionDraft("case-bad", "not-a-number", "s", "d",
+                        Map.of(), "A", "a@tsanet.org")));
+        assertFalse(e instanceof GatewayTimeoutException, "a parse failure is definitive");
+        assertTrue(collaborations.lastCreate.get() == null);
+    }
+
+    @Test
     void interruptedSubmitIsAmbiguousNotDefinitive() {
         // An interrupted wait proves nothing about the create request already on the
         // wire; mapping it to plain GatewayException would re-arm DRAFT and invite a
