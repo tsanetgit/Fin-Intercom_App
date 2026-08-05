@@ -75,6 +75,15 @@ public class FakeTsanetGateway implements TsanetGateway {
             return new ProcessForm("777", "Attach diagnostics as a file.", null, List.of(
                     new FormField("f1", "Diagnostics bundle", "FILES", true, "PROBLEM_SECTION", List.of())));
         }
+        if ("555".equals(partner.departmentId())) {
+            // Mirrors the field-type spread real BETA forms carry (the Phase-1 exit
+            // E2E found required EMAIL/PHONE on sdk2's real form).
+            return new ProcessForm("555", null, null, List.of(
+                    new FormField("61", "Customer Email", "EMAIL", true, "CONTACT_SECTION", List.of()),
+                    new FormField("62", "Customer Phone", "PHONE", false, "CONTACT_SECTION", List.of()),
+                    new FormField("63", "Impact Details", "TEXT", true, "PROBLEM_SECTION", List.of()),
+                    new FormField("64", "Routing Code", "HIDDEN", true, "PROBLEM_SECTION", List.of())));
+        }
         return new ProcessForm(partner.departmentId(), "Please include the serial number and firmware version.",
                 "Call the duty manager for P1s.", List.of(
                         new FormField("88", "Serial Number", "STRING", true, "CONTACT_SECTION", List.of()),
@@ -119,7 +128,8 @@ public class FakeTsanetGateway implements TsanetGateway {
                 new PartnerHit("NetApp | Cloud", "NetApp", "Cloud", "1042", "513"),
                 new PartnerHit("SDK Two Co", "SDK Two Co", null, "1157", null),
                 new PartnerHit("Broken Forms Inc", "Broken Forms Inc", "Support", "2000", "999"),
-                new PartnerHit("Unsupported Co", "Unsupported Co", "Files Dept", "2100", "777")));
+                new PartnerHit("Unsupported Co", "Unsupported Co", "Files Dept", "2100", "777"),
+                new PartnerHit("Typed Forms Co", "Typed Forms Co", "Field Types", "2200", "555")));
         // "capacity" matches 15 partners: exercises the results cap (12) in tests.
         for (int i = 1; i <= 15; i++) {
             partners.add(new PartnerHit("Capacity Test " + i, "Capacity Test " + i, null,

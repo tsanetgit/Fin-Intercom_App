@@ -1,5 +1,6 @@
 package org.tsanet.connector.canvas;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -12,6 +13,11 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import org.tsanet.connector.canvas.OutboundFlowState.Status;
+import org.tsanet.connector.events.EventQueue;
+import org.tsanet.connector.events.InboundEvent;
+import org.tsanet.connector.intercom.AnnotationHandler;
+import org.tsanet.connector.intercom.SubmissionLink;
+import org.tsanet.connector.intercom.SubmissionLinkTable;
 import org.tsanet.connector.tsanet.GatewayException;
 import org.tsanet.connector.tsanet.GatewayTimeoutException;
 import org.tsanet.connector.tsanet.TsanetGateway;
@@ -39,10 +45,15 @@ public class CanvasController {
 
     private final FlowStateStore flows;
     private final TsanetGateway gateway;
+    private final SubmissionLinkTable links;
+    private final EventQueue queue;
 
-    public CanvasController(FlowStateStore flows, TsanetGateway gateway) {
+    public CanvasController(FlowStateStore flows, TsanetGateway gateway, SubmissionLinkTable links,
+            EventQueue queue) {
         this.flows = flows;
         this.gateway = gateway;
+        this.links = links;
+        this.queue = queue;
     }
 
     @PostMapping("/canvas/initialize")
@@ -71,7 +82,7 @@ public class CanvasController {
             return home(flows.create(), surface, null);
         }
         if ("check_status".equals(component)) {
-            return doCheckStatus(state, surface);
+            return doCheckStatus(state, surface, payload);
         }
         if (state.status() != Status.DRAFT) {
             // Search/select/submit from a stale view of a flow whose submission is in
@@ -211,10 +222,15 @@ public class CanvasController {
         components.add(CanvasKit.textarea("description", "Problem description (required)", "What happened, impact, versions",
                 state.values().get("description")));
         for (FormField field : form.fields()) {
+            if (!field.rendered()) {
+                continue; // HIDDEN rides the form template server-side, never the canvas
+            }
             String id = "f_" + field.fieldId();
             String label = field.label() + (field.required() ? " (required)" : "");
-            if ("SELECT".equalsIgnoreCase(field.type())) {
+            if (field.selectShaped()) {
                 components.add(CanvasKit.singleSelect(id, label, field.options(), state.values().get(id)));
+            } else if (field.textareaShaped()) {
+                components.add(CanvasKit.textarea(id, label, null, state.values().get(id)));
             } else {
                 components.add(CanvasKit.input(id, label, null, state.values().get(id)));
             }
@@ -252,7 +268,10 @@ public class CanvasController {
                     missing.add("Problem description");
                 }
                 for (FormField field : state.form().fields()) {
-                    if (field.required() && blank(state.values().get("f_" + field.fieldId()))) {
+                    // Only rendered fields can be typed; a required HIDDEN field is
+                    // the form template's job, not the agent's.
+                    if (field.rendered() && field.required()
+                            && blank(state.values().get("f_" + field.fieldId()))) {
                         missing.add(field.label());
                     }
                 }
@@ -273,10 +292,9 @@ public class CanvasController {
         if (renderedUnderLock != null) {
             return renderedUnderLock;
         }
+        SubmissionResult result;
         try {
-            SubmissionResult result = gateway.submit(draft);
-            state.landed(result);
-            return confirmation(state);
+            result = gateway.submit(draft);
         } catch (GatewayTimeoutException e) {
             // If a concurrent lookup landed the flow first, this renders one stale
             // pending canvas; the next click self-corrects via renderByStatus.
@@ -297,6 +315,12 @@ public class CanvasController {
             state.submitUnresolved();
             return pendingCanvas(state);
         }
+        // The case landed; bookkeeping runs OUTSIDE the gateway try so its failures
+        // can never masquerade as gateway faults or park a landed flow (QA round-2).
+        if (state.landed(result)) {
+            recordLandedSafely(state, payload);
+        }
+        return confirmation(state);
     }
 
     private Map<String, Object> pendingCanvas(OutboundFlowState state) {
@@ -327,14 +351,17 @@ public class CanvasController {
                 CanvasKit.button("back_home", "Start over")), pointer(state));
     }
 
-    private Map<String, Object> doCheckStatus(OutboundFlowState state, String surface) {
+    private Map<String, Object> doCheckStatus(OutboundFlowState state, String surface,
+            Map<String, Object> payload) {
         if (state.status() == Status.LANDED) {
             return confirmation(state);
         }
         try {
             return gateway.findSubmission(state.flowId())
                     .map(result -> {
-                        state.landed(result);
+                        if (state.landed(result)) {
+                            recordLandedSafely(state, payload);
+                        }
                         return confirmation(state);
                     })
                     .orElseGet(() -> {
@@ -398,6 +425,75 @@ public class CanvasController {
         components.add(CanvasKit.input("q", "Partner name or tag", "e.g. NetApp, storage", null));
         components.add(CanvasKit.button("search", "Search partners"));
         return CanvasKit.canvas(components, pointer(state));
+    }
+
+    // ---- landing bookkeeping ----
+
+    /**
+     * First-landing bookkeeping (exactly once per flow, guarded by landed()'s return):
+     * record the routing link, audit the submission, and enqueue the Intercom
+     * annotation - which runs on the event drain, never inside this canvas response
+     * (D2 budget). No case content in the audit line or the link (D10).
+     */
+    /**
+     * A bookkeeping failure must cost exactly the bookkeeping, audited — never the
+     * agent's confirmation (the case DID land), never a fake gateway fault, and never
+     * a silent hole in the manual re-drive path. landed()'s first-transition flag is
+     * already consumed here, so this is the one shot: the audit line is the recovery
+     * key when it misses.
+     */
+    private void recordLandedSafely(OutboundFlowState state, Map<String, Object> payload) {
+        try {
+            recordLanded(state, payload);
+        } catch (RuntimeException e) {
+            SubmissionResult result = state.result();
+            log.error("tsanet_audit event=link_bookkeeping_failed token={} flow={} ticket={}",
+                    result == null ? null : result.token(), state.flowId(),
+                    nestedId(payload.get("ticket")), e);
+        }
+    }
+
+    private void recordLanded(OutboundFlowState state, Map<String, Object> payload) {
+        SubmissionResult result = state.result();
+        PartnerHit partner = state.partner();
+        SubmissionLink link = new SubmissionLink(
+                result.token(),
+                state.flowId(),
+                stringOrNull(payload.get("workspace_id")),
+                nestedId(payload.get("conversation")),
+                nestedId(payload.get("ticket")),
+                partner == null ? null : partner.display(),
+                result.respondBy(),
+                result.testCase(),
+                adminEmail(payload),
+                Instant.now());
+        links.record(link);
+        log.info("tsanet_audit event=case_submitted token={} workspace={} conversation={} ticket={}"
+                        + " partner={} test={}",
+                link.token(), link.workspaceId(), link.conversationId(), link.ticketId(),
+                link.partnerDisplay(), link.testCase());
+        boolean queued = queue.offer(new InboundEvent(InboundEvent.Source.CONNECTOR,
+                AnnotationHandler.KIND, link.token(), Instant.now(),
+                Map.of("token", link.token(), "attempt", 1)));
+        if (!queued) {
+            // The audit line + link table are the manual re-drive path (D10); a full
+            // queue must never eat an annotation silently.
+            log.error("tsanet_audit event=annotation_enqueue_failed token={} ticket={}",
+                    link.token(), link.ticketId());
+        }
+    }
+
+    private static String stringOrNull(Object o) {
+        return o == null ? null : String.valueOf(o);
+    }
+
+    private static String nestedId(Object o) {
+        return o instanceof Map<?, ?> map && map.get("id") != null ? String.valueOf(map.get("id")) : null;
+    }
+
+    private static String adminEmail(Map<String, Object> payload) {
+        return payload.get("admin") instanceof Map<?, ?> admin && admin.get("email") != null
+                ? String.valueOf(admin.get("email")) : null;
     }
 
     // ---- plumbing ----

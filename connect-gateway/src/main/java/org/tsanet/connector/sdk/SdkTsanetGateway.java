@@ -77,6 +77,8 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
     private static final Duration TOKEN_EXPIRY_SKEW = Duration.ofSeconds(30);
     /** Definitive pre-create rejections; everything else on submit is ambiguous. */
     private static final Set<Integer> REJECTED_BEFORE_CREATE = Set.of(400, 401, 403, 404, 422);
+    private static final com.fasterxml.jackson.databind.ObjectMapper PROBLEM_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
 
     /** Wall-clock budgets and the test-submission flag; see docs/decisions.md D2/D9. */
     public record Config(String apiBaseUrl, boolean testSubmission, long readDeadlineMillis,
@@ -120,6 +122,13 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         factory.setReadTimeout((int) config.submitDeadlineMillis());
         RestTemplate restTemplate = new RestTemplate(new BufferingClientHttpRequestFactory(factory));
         restTemplate.getInterceptors().add(bearerPerRequest(session));
+        restTemplate.getInterceptors().add((request, body, execution) -> {
+            // Opt into RFC 7807 errors (the legacy default is a bare 500): documented
+            // 4xx bodies whose `detail` is API-authored user-facing text — see the
+            // guarded extraction in sanitize() (docs/decisions.md D9).
+            request.getHeaders().set("Accept", "application/json, application/problem+json");
+            return execution.execute(request, body);
+        });
         ApiClient apiClient = new ApiClient(restTemplate);
         apiClient.setBasePath(config.apiBaseUrl());
         return new SdkTsanetGateway(session,
@@ -327,6 +336,14 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
             throw new GatewayException("Multiple cases carry this flow's reference; open TSANet Connect"
                     + " to reconcile them before continuing");
         }
+        if (matches.get(0).getToken() == null || matches.get(0).getToken().isBlank()) {
+            // The same D3 rule as submit's token-less 200: a row that cannot supply
+            // the token is not a landing. Failing (not not-found) keeps the flow off
+            // both bad paths: no re-arm while a case may exist, no LANDED-with-null.
+            log.warn("tsanet_gateway_tokenless_row internalCaseNumber={}", internalCaseNumber);
+            throw new GatewayException("Connect returned the case without a token (find);"
+                    + " open TSANet Connect to verify before retrying");
+        }
         return Optional.of(toResult(matches.get(0)));
     }
 
@@ -450,8 +467,13 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
             if (submit && (status == 400 || status == 422)) {
                 // A validation rejection can mean the partner changed the form after
                 // it was loaded; "fix and resubmit" over a stale canvas cannot fix it.
+                // When the API answered in problem+json, its `detail` names the actual
+                // rule (e.g. the submitter email-domain requirement) — the one narrow,
+                // guarded case where response content reaches an agent-visible card.
+                String detail = problemDetail(http);
                 return new GatewayException("Connect API rejected the request (HTTP " + status
-                        + ", submit); if the partner's form changed since it was loaded,"
+                        + ", submit)" + (detail != null ? ": " + detail : "")
+                        + "; if the partner's form changed since it was loaded,"
                         + " reselect the partner and retry");
             }
             return new GatewayException("Connect API rejected the request (HTTP " + status + ", " + op + ")");
@@ -475,5 +497,44 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
             return new GatewayTimeoutException("Connect API call failed (submit); outcome unknown");
         }
         return new GatewayException("Connect API call failed (" + op + ")");
+    }
+
+    /**
+     * The deliberate, mechanically-guarded exception to "no response content in agent
+     * messages": content type MUST be application/problem+json (the API only sends it
+     * when asked), the field is `detail` ONLY and must be a JSON string, control
+     * characters are stripped, angle brackets neutralized, and the result is capped at
+     * 200 chars. Anything failing any guard yields null and the status-only message.
+     */
+    private static String problemDetail(RestClientResponseException http) {
+        org.springframework.http.MediaType contentType =
+                http.getResponseHeaders() == null ? null : http.getResponseHeaders().getContentType();
+        if (contentType == null
+                || !"application".equalsIgnoreCase(contentType.getType())
+                || !"problem+json".equalsIgnoreCase(contentType.getSubtype())) {
+            return null;
+        }
+        try {
+            Object detail = PROBLEM_MAPPER
+                    .readValue(http.getResponseBodyAsString(), java.util.Map.class)
+                    .get("detail");
+            if (!(detail instanceof String text) || text.isBlank()) {
+                return null;
+            }
+            // (?U) makes Cntrl cover Unicode; Cf/Zl/Zp kill RLO, zero-widths and
+            // line separators; markdown-active characters are neutralized because the
+            // canvas renderer's markdown behavior is unverified (live render check).
+            String cleaned = text.replaceAll("(?U)[\\p{Cntrl}\\p{Cf}\\p{Zl}\\p{Zp}]+", " ")
+                    .replace("<", "(").replace(">", ")")
+                    .replace("[", "(").replace("]", ")")
+                    .replace("`", "'")
+                    .strip();
+            if (cleaned.isEmpty()) {
+                return null;
+            }
+            return cleaned.length() > 200 ? cleaned.substring(0, 200) + "..." : cleaned;
+        } catch (RuntimeException | com.fasterxml.jackson.core.JacksonException unparseable) {
+            return null;
+        }
     }
 }

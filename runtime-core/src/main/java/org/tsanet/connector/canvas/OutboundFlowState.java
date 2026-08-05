@@ -108,10 +108,17 @@ public final class OutboundFlowState {
         return true;
     }
 
-    /** The case exists (submit returned, or a reconcile lookup found it). Terminal. */
-    public synchronized void landed(SubmissionResult result) {
+    /**
+     * The case exists (submit returned, or a reconcile lookup found it). Terminal.
+     * Returns true only on the FIRST transition to LANDED, so the caller records the
+     * submission link and enqueues annotation exactly once per flow, no matter how
+     * many views land the same result concurrently.
+     */
+    public synchronized boolean landed(SubmissionResult result) {
+        boolean first = this.status != Status.LANDED;
         this.result = result;
         this.status = Status.LANDED;
+        return first;
     }
 
     /** The in-flight submit timed out; outcome unknown until a reconcile lookup answers. */

@@ -351,6 +351,54 @@ class SdkTsanetGatewayTest {
     }
 
     @Test
+    void problemJsonDetailSurfacesOnSubmitRejection() {
+        forms.onFetch = () -> formWithField(88);
+        collaborations.onCreate = form -> {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Content-Type", "application/problem+json");
+            String body = "{\"title\":\"Bad Request\",\"detail\":\"Submitter email must be on the"
+                    + " member's registered domain\",\"instance\":\"https://internal.invalid/x\"}";
+            throw HttpClientErrorException.create(HttpStatus.UNPROCESSABLE_ENTITY, "rejected",
+                    headers, body.getBytes(StandardCharsets.UTF_8), null);
+        };
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        GatewayException e = assertThrows(GatewayException.class,
+                () -> gateway.submit(draft("case-pj", Map.of("88", "SN"))));
+        assertTrue(e.getMessage().contains("registered domain"),
+                "the RFC 7807 detail is the agent-actionable rule and must surface");
+        assertFalse(e.getMessage().contains("internal.invalid"),
+                "only the detail field surfaces, never other problem members");
+    }
+
+    @Test
+    void problemDetailGuardsRejectNonProblemAndMalformedBodies() {
+        forms.onFetch = () -> formWithField(88);
+        // Same detail-bearing body but WITHOUT the problem+json content type: the
+        // guard must refuse it and fall back to the status-only message.
+        collaborations.onCreate = form -> {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Content-Type", "application/json");
+            throw HttpClientErrorException.create(HttpStatus.BAD_REQUEST, "bad", headers,
+                    ("{\"detail\":\"" + LEAKY_BODY + "\"}").getBytes(StandardCharsets.UTF_8), null);
+        };
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        GatewayException e = assertThrows(GatewayException.class,
+                () -> gateway.submit(draft("case-pj2", Map.of("88", "SN"))));
+        assertFalse(e.getMessage().contains("XYZSECRET"));
+
+        // problem+json content type but detail is not a string: guard yields null.
+        collaborations.onCreate = form -> {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Content-Type", "application/problem+json");
+            throw HttpClientErrorException.create(HttpStatus.UNPROCESSABLE_ENTITY, "bad", headers,
+                    "{\"detail\":{\"nested\":\"object\"}}".getBytes(StandardCharsets.UTF_8), null);
+        };
+        GatewayException e2 = assertThrows(GatewayException.class,
+                () -> gateway.submit(draft("case-pj3", Map.of("88", "SN"))));
+        assertFalse(e2.getMessage().contains("nested"));
+    }
+
+    @Test
     void formFetchFailureDuringSubmitIsAReadFailureNotAmbiguous() {
         // The re-fetch is a READ inside the submit budget: its 5xx parks nothing,
         // because no create was attempted (QA round-3 note - manufacturing ambiguity
@@ -436,6 +484,43 @@ class SdkTsanetGatewayTest {
         SdkTsanetGateway gateway = gateway(1500, 4000);
         GatewayException e = assertThrows(GatewayException.class, () -> gateway.findSubmission("case-8"));
         assertTrue(e.getMessage().contains("Multiple cases"));
+    }
+
+    @Test
+    void findSubmissionRejectsATokenlessRow() {
+        // QA round-2: submit treats a token-less 200 as ambiguous per D3, but the
+        // reconcile read had no such guard — a matching row with a null token NPE'd
+        // the handler and poisoned the flow LANDED-with-null. A row that cannot
+        // supply the token is not a landing: explicit failure, never not-found (a
+        // case may exist) and never a null-token result.
+        collaborations.onList = () -> List.of(status("case-nt", null, true));
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        GatewayException e = assertThrows(GatewayException.class, () -> gateway.findSubmission("case-nt"));
+        assertFalse(e instanceof GatewayTimeoutException);
+        assertTrue(e.getMessage().contains("without a token"));
+    }
+
+    @Test
+    void problemDetailStripsUnicodeControlsAndMarkdown() {
+        forms.onFetch = () -> formWithField(88);
+        collaborations.onCreate = form -> {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Content-Type", "application/problem+json");
+            String body = "{\"detail\":\"Rejected\\u202e\\u200b\\u2028 [click me](https://evil.invalid)"
+                    + " `code` field\"}";
+            throw HttpClientErrorException.create(HttpStatus.UNPROCESSABLE_ENTITY, "bad",
+                    headers, body.getBytes(StandardCharsets.UTF_8), null);
+        };
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        GatewayException e = assertThrows(GatewayException.class,
+                () -> gateway.submit(draft("case-uni", Map.of("88", "SN"))));
+        String message = e.getMessage();
+        assertFalse(message.contains("\u202e"), "RTL override must be stripped");
+        assertFalse(message.contains("\u200b"), "zero-width space must be stripped");
+        assertFalse(message.contains("\u2028"), "line separator must be stripped");
+        assertFalse(message.contains("[") || message.contains("`"),
+                "markdown-active characters are neutralized pending the live render check");
+        assertTrue(message.contains("(click me)(https://evil.invalid)"));
     }
 
     @Test
