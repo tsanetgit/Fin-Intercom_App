@@ -38,7 +38,12 @@ public final class OutboundFlowState {
     private ProcessForm form;
     private final Map<String, String> values = new ConcurrentHashMap<>();
     private SubmissionResult result;
-    private Status status = Status.DRAFT;
+    // volatile so status can be READ without the flow monitor: FlowStateStore's
+    // eviction/TTL checks run under the STORE monitor, and taking per-flow locks
+    // there is one half of a lock-order inversion (QA round-3 deadlock probe; the
+    // other half is never calling into the store while holding a flow monitor).
+    // Writes still happen only inside synchronized transition methods.
+    private volatile Status status = Status.DRAFT;
 
     OutboundFlowState(String flowId) {
         this.flowId = flowId;
@@ -85,7 +90,8 @@ public final class OutboundFlowState {
         return result;
     }
 
-    public synchronized Status status() {
+    /** Lock-free on purpose (volatile read) — safe under the store monitor. */
+    public Status status() {
         return status;
     }
 

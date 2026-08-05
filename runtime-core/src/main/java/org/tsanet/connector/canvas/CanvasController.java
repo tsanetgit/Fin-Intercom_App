@@ -227,39 +227,51 @@ public class CanvasController {
 
     private Map<String, Object> doSubmit(OutboundFlowState state, Map<String, Object> payload,
             Map<String, String> inputs, boolean retry) {
-        SubmissionDraft draft;
+        SubmissionDraft draft = null;
+        Map<String, Object> renderedUnderLock = null;
+        boolean lostForm = false;
         // One monitor section covers merge -> validate -> claim -> snapshot, so a
         // concurrent select cannot swap the form between validation and the draft, and
         // no value can arrive after validation has read them (QA round-2 lock-scope
         // note). The gateway call stays outside the lock; contention is per-flow.
+        // NO store call may run in here: flows.create()/find() hold the STORE monitor,
+        // and opposing acquisition orders are a connector-wide deadlock (QA round-3) —
+        // so the lost-form restart is only DECIDED here and minted after release.
         synchronized (state) {
             if (state.form() == null || state.partner() == null) {
-                return home(flows.create(), surface(payload), "That panel session lost its form; starting over.");
-            }
-            if (!retry) {
-                state.values().putAll(inputs);
-            }
-            List<String> missing = new ArrayList<>();
-            if (blank(state.values().get("summary"))) {
-                missing.add("Problem summary");
-            }
-            if (blank(state.values().get("description"))) {
-                missing.add("Problem description");
-            }
-            for (FormField field : state.form().fields()) {
-                if (field.required() && blank(state.values().get("f_" + field.fieldId()))) {
-                    missing.add(field.label());
+                lostForm = true;
+            } else {
+                if (!retry) {
+                    state.values().putAll(inputs);
+                }
+                List<String> missing = new ArrayList<>();
+                if (blank(state.values().get("summary"))) {
+                    missing.add("Problem summary");
+                }
+                if (blank(state.values().get("description"))) {
+                    missing.add("Problem description");
+                }
+                for (FormField field : state.form().fields()) {
+                    if (field.required() && blank(state.values().get("f_" + field.fieldId()))) {
+                        missing.add(field.label());
+                    }
+                }
+                if (!missing.isEmpty()) {
+                    renderedUnderLock = formCanvas(state, "Missing required: " + String.join(", ", missing));
+                } else if (!state.beginSubmit()) {
+                    // The one legal submit is claiming DRAFT -> SUBMITTING; losing the
+                    // claim means another view already submitted (or the outcome is known).
+                    renderedUnderLock = renderByStatus(state, surface(payload), null);
+                } else {
+                    draft = draftFrom(state, payload);
                 }
             }
-            if (!missing.isEmpty()) {
-                return formCanvas(state, "Missing required: " + String.join(", ", missing));
-            }
-            // The one legal submit is claiming DRAFT -> SUBMITTING; losing the claim
-            // means another view already submitted (or the outcome is known).
-            if (!state.beginSubmit()) {
-                return renderByStatus(state, surface(payload), null);
-            }
-            draft = draftFrom(state, payload);
+        }
+        if (lostForm) {
+            return home(flows.create(), surface(payload), "That panel session lost its form; starting over.");
+        }
+        if (renderedUnderLock != null) {
+            return renderedUnderLock;
         }
         try {
             SubmissionResult result = gateway.submit(draft);
