@@ -72,10 +72,14 @@ public class SdkGatewayConfiguration {
                 props.testSubmission(),
                 props.readDeadlineMillis() == null ? 0 : props.readDeadlineMillis(),
                 props.submitDeadlineMillis() == null ? 0 : props.submitDeadlineMillis());
-        log.info("SDK gateway wired for member 'default': base={} authMode={} testSubmission={}",
-                props.apiBaseUrl(), props.authMode(), props.testSubmission());
-        return registry.gatewayFor("default", new MemberSessionRegistry.MemberBinding(
+        SdkTsanetGateway gateway = registry.gatewayFor("default", new MemberSessionRegistry.MemberBinding(
                 props.apiBaseUrl(), props.sqlitePath(), credentials, config));
+        // Deadline-bounded (1500ms) probe: warms the token so the first canvas read
+        // does not pay login inside its own budget, and surfaces bad credentials in
+        // the startup log instead of the first agent interaction. Never fails boot.
+        log.info("SDK gateway wired for member 'default': base={} authMode={} testSubmission={} healthy={}",
+                props.apiBaseUrl(), props.authMode(), props.testSubmission(), gateway.healthy());
+        return gateway;
     }
 
     private static void require(String value, String property) {

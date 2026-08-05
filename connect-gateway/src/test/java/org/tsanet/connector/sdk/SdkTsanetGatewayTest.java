@@ -350,6 +350,23 @@ class SdkTsanetGatewayTest {
         assertNotNull(sent.getPriority(), "priority defaults when the form has none");
     }
 
+    @Test
+    void interruptedSubmitIsAmbiguousNotDefinitive() {
+        // An interrupted wait proves nothing about the create request already on the
+        // wire; mapping it to plain GatewayException would re-arm DRAFT and invite a
+        // duplicate submit (advisor catch on the pre-PR review).
+        forms.onFetch = () -> formWithField(88);
+        collaborations.onCreate = form -> status("case-int", "TSA-INT", true);
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        Thread.currentThread().interrupt();
+        try {
+            assertThrows(GatewayTimeoutException.class,
+                    () -> gateway.submit(draft("case-int", Map.of("88", "SN"))));
+        } finally {
+            assertTrue(Thread.interrupted(), "the interrupt flag must be restored, then cleared for the suite");
+        }
+    }
+
     // ---- 401 recovery ----
 
     @Test

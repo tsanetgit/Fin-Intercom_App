@@ -89,7 +89,12 @@ public final class MemberSessionRegistry {
         }).gateway();
     }
 
-    /** Drops the member's cached pair so the next request rebuilds it (credential rotation). */
+    /**
+     * Drops the member's cached pair so the next request rebuilds it (credential
+     * rotation). TODO(multi-member): close() interrupts the old gateway's in-flight
+     * calls and later use of a closed gateway surfaces a raw RejectedExecutionException
+     * from its executor; when rotation becomes a live operation, drain instead.
+     */
     public void invalidate(String memberKey) {
         Holder removed = members.remove(memberKey);
         if (removed != null) {

@@ -192,11 +192,14 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
             return List.of();
         }
         return body.stream()
+                // A hit without a companyId cannot be selected (no form target and no
+                // content key); dropping it here beats rendering a dead button.
+                .filter(dto -> dto.getCompanyId() != null)
                 .map(dto -> new PartnerHit(
                         dto.getLabel(),
                         dto.getCompanyName(),
                         dto.getDepartmentName(),
-                        dto.getCompanyId() == null ? null : String.valueOf(dto.getCompanyId()),
+                        String.valueOf(dto.getCompanyId()),
                         dto.getDepartmentId() == null ? null : String.valueOf(dto.getDepartmentId())))
                 .toList();
     }
@@ -379,6 +382,11 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             future.cancel(true);
+            if ("submit".equals(op)) {
+                // The create may already be on the wire: ambiguous like any other
+                // submit fault, or the interruption re-arms a duplicate submit.
+                throw new GatewayTimeoutException("Connect API call interrupted (submit); outcome unknown");
+            }
             throw new GatewayException("Connect API call interrupted (" + op + ")");
         } catch (ExecutionException e) {
             throw sanitize(op, e.getCause());
