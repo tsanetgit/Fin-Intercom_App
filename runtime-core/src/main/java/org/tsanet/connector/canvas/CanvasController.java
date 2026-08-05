@@ -71,7 +71,7 @@ public class CanvasController {
             return home(flows.create(), surface, null);
         }
         if ("check_status".equals(component)) {
-            return doCheckStatus(state);
+            return doCheckStatus(state, surface);
         }
         if (state.status() != Status.DRAFT) {
             // Search/select/submit from a stale view of a flow whose submission is in
@@ -82,7 +82,7 @@ public class CanvasController {
             return doSearch(state, surface, inputs.getOrDefault("q", "").trim());
         }
         if (component.startsWith("select:")) {
-            return doSelect(state, component.substring("select:".length()));
+            return doSelect(state, surface, component.substring("select:".length()));
         }
         if ("submit_case".equals(component) || "retry_submit".equals(component)) {
             return doSubmit(state, payload, inputs, "retry_submit".equals(component));
@@ -111,6 +111,9 @@ public class CanvasController {
         return resultsCanvas(state, hits.size() + " result(s) for \"" + query + "\"");
     }
 
+    /** Payload-size guard (D8's motivation): more hits than this asks for a narrower search. */
+    private static final int MAX_RESULT_BUTTONS = 12;
+
     private Map<String, Object> resultsCanvas(OutboundFlowState state, String subtitle) {
         List<Map<String, Object>> components = new ArrayList<>();
         components.add(CanvasKit.header("Select a partner"));
@@ -118,30 +121,45 @@ public class CanvasController {
             components.add(CanvasKit.muted(subtitle));
         }
         List<PartnerHit> hits = state.hits();
-        for (int i = 0; i < hits.size(); i++) {
-            components.add(CanvasKit.button("select:" + i, hits.get(i).display()));
+        // Buttons carry the partner's identity (companyId|departmentId), not a list
+        // index: a stale results canvas in another view can never select a DIFFERENT
+        // partner than the label that was clicked (QA round-1 regression note).
+        int shown = Math.min(hits.size(), MAX_RESULT_BUTTONS);
+        for (int i = 0; i < shown; i++) {
+            PartnerHit hit = hits.get(i);
+            components.add(CanvasKit.button("select:" + contentKey(hit), hit.display()));
+        }
+        if (hits.size() > shown) {
+            components.add(CanvasKit.muted("Showing the first " + shown + " of " + hits.size()
+                    + " matches; refine your search to see the rest."));
         }
         components.add(CanvasKit.divider());
         components.add(CanvasKit.button("back_home", "Start over"));
         return CanvasKit.canvas(components, pointer(state));
     }
 
-    private Map<String, Object> doSelect(OutboundFlowState state, String indexRaw) {
-        int index;
-        try {
-            index = Integer.parseInt(indexRaw);
-        } catch (NumberFormatException e) {
-            index = -1;
+    private static String contentKey(PartnerHit hit) {
+        return hit.companyId() + "|" + (hit.departmentId() == null ? "" : hit.departmentId());
+    }
+
+    private Map<String, Object> doSelect(OutboundFlowState state, String surface, String key) {
+        PartnerHit partner = state.hits().stream()
+                .filter(hit -> contentKey(hit).equals(key))
+                .findFirst()
+                .orElse(null);
+        if (partner == null) {
+            // Wrong-but-well-formed input: a syntactically valid key that is not in
+            // the CURRENT list (stale canvas, or a fabricated id). Re-render the
+            // current results rather than acting or dead-ending.
+            return state.hits().isEmpty()
+                    ? home(state, surface, "That selection is no longer valid; search again.")
+                    : resultsCanvas(state, "That selection is no longer in the results; pick from the current list.");
         }
-        if (index < 0 || index >= state.hits().size()) {
-            return home(state, "conversation", "That selection is no longer valid; search again.");
-        }
-        PartnerHit partner = state.hits().get(index);
         ProcessForm form;
         try {
             form = gateway.form(partner);
         } catch (GatewayException e) {
-            return home(state, "conversation",
+            return home(state, surface,
                     "Couldn't load the form for " + partner.display() + " (" + e.getMessage() + "); try again.");
         }
         List<FormField> unsupported = form.unsupportedFields();
@@ -185,6 +203,9 @@ public class CanvasController {
         }
         if (form.adminNote() != null && !form.adminNote().isBlank()) {
             components.add(CanvasKit.muted("Partner note: " + form.adminNote()));
+        }
+        if (form.escalationInstructions() != null && !form.escalationInstructions().isBlank()) {
+            components.add(CanvasKit.muted("Escalation: " + form.escalationInstructions()));
         }
         components.add(CanvasKit.input("summary", "Problem summary (required)", "One line", state.values().get("summary")));
         components.add(CanvasKit.textarea("description", "Problem description (required)", "What happened, impact, versions",
@@ -294,7 +315,7 @@ public class CanvasController {
                 CanvasKit.button("back_home", "Start over")), pointer(state));
     }
 
-    private Map<String, Object> doCheckStatus(OutboundFlowState state) {
+    private Map<String, Object> doCheckStatus(OutboundFlowState state, String surface) {
         if (state.status() == Status.LANDED) {
             return confirmation(state);
         }
@@ -311,8 +332,12 @@ public class CanvasController {
                         return switch (state.status()) {
                             case LANDED -> confirmation(state);
                             case SUBMITTING -> inProgressCanvas(state);
-                            // DRAFT: an earlier lookup already re-armed retry.
-                            default -> notFoundCanvas(state);
+                            // DRAFT here means no submit ever ran, or an earlier lookup
+                            // already re-armed: render the current step with a neutral
+                            // truth, never copy that invites a "retry" that would be a
+                            // FIRST submission (QA round-2 note).
+                            default -> renderByStatus(state, surface,
+                                    "No case exists for this flow yet.");
                         };
                     });
         } catch (GatewayException e) {

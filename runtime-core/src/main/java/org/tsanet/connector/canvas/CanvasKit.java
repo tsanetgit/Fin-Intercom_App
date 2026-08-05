@@ -16,11 +16,12 @@ public final class CanvasKit {
     private CanvasKit() {
     }
 
-    public static Map<String, Object> canvas(List<Map<String, Object>> components) {
-        return Map.of("canvas", Map.of("content", Map.of("components", components)));
-    }
-
-    /** Canvas whose stored_data round-trips back to us on the next submit (D8: pointer only). */
+    /**
+     * Canvas whose stored_data round-trips back to us on the next submit (D8: pointer
+     * only). Deliberately the ONLY canvas builder: a no-stored_data overload sat here
+     * unused until QA flagged it as a footgun — anything picking it up would silently
+     * drop the flow pointer, the exact echo-forward bug OutboundFlowTest guards.
+     */
     public static Map<String, Object> canvas(List<Map<String, Object>> components, Map<String, Object> storedData) {
         return Map.of("canvas", Map.of("content", Map.of("components", components), "stored_data", storedData));
     }
