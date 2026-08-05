@@ -120,6 +120,13 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         factory.setReadTimeout((int) config.submitDeadlineMillis());
         RestTemplate restTemplate = new RestTemplate(new BufferingClientHttpRequestFactory(factory));
         restTemplate.getInterceptors().add(bearerPerRequest(session));
+        restTemplate.getInterceptors().add((request, body, execution) -> {
+            // Opt into RFC 7807 errors (the legacy default is a bare 500): documented
+            // 4xx bodies whose `detail` is API-authored user-facing text — see the
+            // guarded extraction in sanitize() (docs/decisions.md D9).
+            request.getHeaders().set("Accept", "application/json, application/problem+json");
+            return execution.execute(request, body);
+        });
         ApiClient apiClient = new ApiClient(restTemplate);
         apiClient.setBasePath(config.apiBaseUrl());
         return new SdkTsanetGateway(session,
@@ -435,6 +442,38 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
      * detail). Full cause goes to the server log here. GatewayExceptions pass through
      * untouched: theirs are constructed-safe (SDK validation strings included).
      */
+    /**
+     * The deliberate, mechanically-guarded exception to "no response content in agent
+     * messages": content type MUST be application/problem+json (the API only sends it
+     * when asked), the field is `detail` ONLY and must be a JSON string, control
+     * characters are stripped, angle brackets neutralized, and the result is capped at
+     * 200 chars. Anything failing any guard yields null and the status-only message.
+     */
+    private static String problemDetail(RestClientResponseException http) {
+        org.springframework.http.MediaType contentType =
+                http.getResponseHeaders() == null ? null : http.getResponseHeaders().getContentType();
+        if (contentType == null || !"problem+json".equalsIgnoreCase(contentType.getSubtype())) {
+            return null;
+        }
+        try {
+            Object detail = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readValue(http.getResponseBodyAsString(), java.util.Map.class)
+                    .get("detail");
+            if (!(detail instanceof String text) || text.isBlank()) {
+                return null;
+            }
+            String cleaned = text.replaceAll("\\p{Cntrl}+", " ")
+                    .replace("<", "(").replace(">", ")")
+                    .strip();
+            if (cleaned.isEmpty()) {
+                return null;
+            }
+            return cleaned.length() > 200 ? cleaned.substring(0, 200) + "..." : cleaned;
+        } catch (RuntimeException | com.fasterxml.jackson.core.JacksonException unparseable) {
+            return null;
+        }
+    }
+
     private GatewayException sanitize(String op, Throwable cause) {
         boolean submit = "submit".equals(op);
         if (cause instanceof GatewayException gateway) {
@@ -450,8 +489,13 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
             if (submit && (status == 400 || status == 422)) {
                 // A validation rejection can mean the partner changed the form after
                 // it was loaded; "fix and resubmit" over a stale canvas cannot fix it.
+                // When the API answered in problem+json, its `detail` names the actual
+                // rule (e.g. the submitter email-domain requirement) — the one narrow,
+                // guarded case where response content reaches an agent-visible card.
+                String detail = problemDetail(http);
                 return new GatewayException("Connect API rejected the request (HTTP " + status
-                        + ", submit); if the partner's form changed since it was loaded,"
+                        + ", submit)" + (detail != null ? ": " + detail : "")
+                        + "; if the partner's form changed since it was loaded,"
                         + " reselect the partner and retry");
             }
             return new GatewayException("Connect API rejected the request (HTTP " + status + ", " + op + ")");

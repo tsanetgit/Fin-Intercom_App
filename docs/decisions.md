@@ -85,6 +85,13 @@ the reconciliation poller remains the source of truth in both directions.
 - List-type ticket attributes: `list_items` is a comma-separated string; an array 500s.
   Option labels therefore cannot contain commas.
 - `POST /conversations` returns a message id, not the conversation id.
+- Ticket custom attributes are keyed by attribute NAME in `ticket_attributes` (write
+  and read); datetime attributes take EPOCH SECONDS (probed live 2026-08-05,
+  round-tripped). Attribute identity is therefore name-keyed: a workspace-side rename
+  surfaces as the annotation's D3 read-back failing, not as an error on the write.
+- The top-level `ticket` key rides EVERY canvas request type from a ticket surface
+  (initialize and submit both, per the spike hit log), so the landing request's
+  payload always carries the anchor.
 
 ## D6. Module split and the SDK pin
 
@@ -160,3 +167,39 @@ Mechanics, each pinned by a unit probe:
 Live receipt: SdkTsanetGatewayBetaContractTest (env-gated; CI skips it green) passed
 5/5 against BETA with the sdk1/sdk2 members on 2026-08-05, 2.8s wall clock for login +
 search + form + create + reconcile — comfortably inside the D2 budgets.
+
+
+## D10. Annotation pipeline: queued writes, a never-evicting link table, honest audit
+
+Landing a submission records a SubmissionLink — the token <-> ticket routing substrate,
+indexed by token, internalCaseNumber and conversation id, because Phase-2 inbound
+routes from TSANet by token and from Intercom by conversation. Links are precious and
+never evicted; the table is in-memory for Phase 1, which makes **persistence a
+PRECONDITION for Phase 2 inbound, not a nice-to-have**: a restart loses the table, a
+queued annotation then logs `link_missing`, and no pre-restart case can be routed.
+
+Annotation runs on the event drain (the D2 budget forbids Intercom calls inside a
+canvas response) through the new handler seam on EventQueue — the same seam Phase-2
+inbound processing plugs into. `InboundEvent`'s name now undersells it (it also
+carries Source.CONNECTOR work); renaming is deferred deliberately. One drain thread on
+purpose: handlers make bounded blocking calls, and at pilot volume webhook events
+queueing behind an annotation is acceptable — revisit with Phase 2.
+
+Idempotency and honesty rules: the handler is idempotent by the link's tri-state
+annotation status (NONE/DEGRADED/FULL — a boolean would report a degraded write as
+done and hide the exact wire-format signal); retries re-offer through a scheduler
+(5s/20s backoff, 3 attempts, never sleeping the drain; re-offers bypass webhook-intake
+dedupe by construction since dedupe lives in the intake controller); exhaustion and
+missing links are audited loudly (`annotation_failed`, `link_missing`) because the
+audit line plus the link table ARE the manual re-drive path until the reconciliation
+poller exists. Audit lines (`tsanet_audit event=case_submitted|annotation_done|
+annotation_degraded|annotation_retry|annotation_failed|link_missing`) carry routing
+facts only — never case content.
+
+problem+json (in the SDK gateway, D9's sanitization rule): the Connect API's legacy
+default error is a bare 500; the gateway now opts in via Accept and surfaces the RFC
+7807 `detail` string into agent-visible submit-rejection messages under mechanical
+guards (submit 400/422 only; content type must be application/problem+json; `detail`
+must be a JSON string; control chars stripped, angle brackets neutralized, 200-char
+cap). The guards are the justification: the email-domain rule rejection is the
+canonical case an agent cannot act on from a status code alone.

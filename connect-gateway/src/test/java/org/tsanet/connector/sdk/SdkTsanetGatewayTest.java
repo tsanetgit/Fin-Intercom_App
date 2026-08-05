@@ -351,6 +351,54 @@ class SdkTsanetGatewayTest {
     }
 
     @Test
+    void problemJsonDetailSurfacesOnSubmitRejection() {
+        forms.onFetch = () -> formWithField(88);
+        collaborations.onCreate = form -> {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Content-Type", "application/problem+json");
+            String body = "{\"title\":\"Bad Request\",\"detail\":\"Submitter email must be on the"
+                    + " member's registered domain\",\"instance\":\"https://internal.invalid/x\"}";
+            throw HttpClientErrorException.create(HttpStatus.UNPROCESSABLE_ENTITY, "rejected",
+                    headers, body.getBytes(StandardCharsets.UTF_8), null);
+        };
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        GatewayException e = assertThrows(GatewayException.class,
+                () -> gateway.submit(draft("case-pj", Map.of("88", "SN"))));
+        assertTrue(e.getMessage().contains("registered domain"),
+                "the RFC 7807 detail is the agent-actionable rule and must surface");
+        assertFalse(e.getMessage().contains("internal.invalid"),
+                "only the detail field surfaces, never other problem members");
+    }
+
+    @Test
+    void problemDetailGuardsRejectNonProblemAndMalformedBodies() {
+        forms.onFetch = () -> formWithField(88);
+        // Same detail-bearing body but WITHOUT the problem+json content type: the
+        // guard must refuse it and fall back to the status-only message.
+        collaborations.onCreate = form -> {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Content-Type", "application/json");
+            throw HttpClientErrorException.create(HttpStatus.BAD_REQUEST, "bad", headers,
+                    ("{\"detail\":\"" + LEAKY_BODY + "\"}").getBytes(StandardCharsets.UTF_8), null);
+        };
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        GatewayException e = assertThrows(GatewayException.class,
+                () -> gateway.submit(draft("case-pj2", Map.of("88", "SN"))));
+        assertFalse(e.getMessage().contains("XYZSECRET"));
+
+        // problem+json content type but detail is not a string: guard yields null.
+        collaborations.onCreate = form -> {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Content-Type", "application/problem+json");
+            throw HttpClientErrorException.create(HttpStatus.UNPROCESSABLE_ENTITY, "bad", headers,
+                    "{\"detail\":{\"nested\":\"object\"}}".getBytes(StandardCharsets.UTF_8), null);
+        };
+        GatewayException e2 = assertThrows(GatewayException.class,
+                () -> gateway.submit(draft("case-pj3", Map.of("88", "SN"))));
+        assertFalse(e2.getMessage().contains("nested"));
+    }
+
+    @Test
     void formFetchFailureDuringSubmitIsAReadFailureNotAmbiguous() {
         // The re-fetch is a READ inside the submit budget: its 5xx parks nothing,
         // because no create was attempted (QA round-3 note - manufacturing ambiguity
