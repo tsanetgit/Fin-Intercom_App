@@ -92,9 +92,15 @@ public class AnnotationHandler implements InboundEventHandler {
                 log.warn("tsanet_audit event=annotation_retry token={} attempt={} next_in_ms={} reason={}",
                         token, attempt, delay, failure.getMessage());
                 int next = attempt + 1;
-                scheduler.schedule(() -> queue.offer(new InboundEvent(
-                        InboundEvent.Source.CONNECTOR, KIND, token, Instant.now(),
-                        Map.of("token", token, "attempt", next))), delay, TimeUnit.MILLISECONDS);
+                scheduler.schedule(() -> {
+                    boolean queued = queue.offer(new InboundEvent(
+                            InboundEvent.Source.CONNECTOR, KIND, token, Instant.now(),
+                            Map.of("token", token, "attempt", next)));
+                    if (!queued) {
+                        log.error("tsanet_audit event=annotation_enqueue_failed token={} attempt={}",
+                                token, next);
+                    }
+                }, delay, TimeUnit.MILLISECONDS);
             } else {
                 log.error("tsanet_audit event=annotation_failed token={} workspace={} conversation={}"
                                 + " ticket={} attempts={} reason={}",

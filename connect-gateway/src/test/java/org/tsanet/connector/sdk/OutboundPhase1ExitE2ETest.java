@@ -251,8 +251,10 @@ class OutboundPhase1ExitE2ETest {
                 "D3 read-back: the token must be on the ticket");
         assertEquals(link.partnerDisplay(), attrs.path("Partner").asText());
         if (link.respondBy() != null) {
-            // THE named datetime-format assertion D5 promises: epoch seconds round-trip.
-            assertTrue(attrs.hasNonNull("Respond By"),
+            // THE named datetime-format assertion D5 promises: the VALUE round-trips
+            // as epoch seconds, not merely some value being present.
+            assertEquals(java.time.OffsetDateTime.parse(link.respondBy()).toEpochSecond(),
+                    attrs.path("Respond By").asLong(),
                     "Respond By must round-trip as epoch seconds when the case carries one");
         }
     }

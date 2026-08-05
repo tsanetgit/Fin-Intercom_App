@@ -442,38 +442,6 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
      * detail). Full cause goes to the server log here. GatewayExceptions pass through
      * untouched: theirs are constructed-safe (SDK validation strings included).
      */
-    /**
-     * The deliberate, mechanically-guarded exception to "no response content in agent
-     * messages": content type MUST be application/problem+json (the API only sends it
-     * when asked), the field is `detail` ONLY and must be a JSON string, control
-     * characters are stripped, angle brackets neutralized, and the result is capped at
-     * 200 chars. Anything failing any guard yields null and the status-only message.
-     */
-    private static String problemDetail(RestClientResponseException http) {
-        org.springframework.http.MediaType contentType =
-                http.getResponseHeaders() == null ? null : http.getResponseHeaders().getContentType();
-        if (contentType == null || !"problem+json".equalsIgnoreCase(contentType.getSubtype())) {
-            return null;
-        }
-        try {
-            Object detail = new com.fasterxml.jackson.databind.ObjectMapper()
-                    .readValue(http.getResponseBodyAsString(), java.util.Map.class)
-                    .get("detail");
-            if (!(detail instanceof String text) || text.isBlank()) {
-                return null;
-            }
-            String cleaned = text.replaceAll("\\p{Cntrl}+", " ")
-                    .replace("<", "(").replace(">", ")")
-                    .strip();
-            if (cleaned.isEmpty()) {
-                return null;
-            }
-            return cleaned.length() > 200 ? cleaned.substring(0, 200) + "..." : cleaned;
-        } catch (RuntimeException | com.fasterxml.jackson.core.JacksonException unparseable) {
-            return null;
-        }
-    }
-
     private GatewayException sanitize(String op, Throwable cause) {
         boolean submit = "submit".equals(op);
         if (cause instanceof GatewayException gateway) {
@@ -519,5 +487,37 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
             return new GatewayTimeoutException("Connect API call failed (submit); outcome unknown");
         }
         return new GatewayException("Connect API call failed (" + op + ")");
+    }
+
+    /**
+     * The deliberate, mechanically-guarded exception to "no response content in agent
+     * messages": content type MUST be application/problem+json (the API only sends it
+     * when asked), the field is `detail` ONLY and must be a JSON string, control
+     * characters are stripped, angle brackets neutralized, and the result is capped at
+     * 200 chars. Anything failing any guard yields null and the status-only message.
+     */
+    private static String problemDetail(RestClientResponseException http) {
+        org.springframework.http.MediaType contentType =
+                http.getResponseHeaders() == null ? null : http.getResponseHeaders().getContentType();
+        if (contentType == null || !"problem+json".equalsIgnoreCase(contentType.getSubtype())) {
+            return null;
+        }
+        try {
+            Object detail = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readValue(http.getResponseBodyAsString(), java.util.Map.class)
+                    .get("detail");
+            if (!(detail instanceof String text) || text.isBlank()) {
+                return null;
+            }
+            String cleaned = text.replaceAll("\\p{Cntrl}+", " ")
+                    .replace("<", "(").replace(">", ")")
+                    .strip();
+            if (cleaned.isEmpty()) {
+                return null;
+            }
+            return cleaned.length() > 200 ? cleaned.substring(0, 200) + "..." : cleaned;
+        } catch (RuntimeException | com.fasterxml.jackson.core.JacksonException unparseable) {
+            return null;
+        }
     }
 }

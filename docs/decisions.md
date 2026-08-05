@@ -209,3 +209,14 @@ guards (submit 400/422 only; content type must be application/problem+json; `det
 must be a JSON string; control chars stripped, angle brackets neutralized, 200-char
 cap). The guards are the justification: the email-domain rule rejection is the
 canonical case an agent cannot act on from a status code alone.
+
+Two deliberate trade-offs, named: rest mode with a blank admin-id resolves it via
+GET /me at wiring time, which makes Intercom reachability a startup dependency
+(configure admin-id to remove it); and a note POST that times out client-side after
+the server processed it can duplicate the note on retry - bounded by the 3-attempt
+cap and pilot-acceptable, revisit with the reconciliation poller. A full event queue
+drops the annotation event; both offer sites audit `annotation_enqueue_failed` with
+the token so the manual re-drive path holds even then. One more honest gap: HIDDEN
+form fields are ASSUMED to be filled server-side from the form template (no live
+receipt yet - sdk2's form has none); if the API instead expects the client to echo
+template values, submission fails loud and problem+json detail names the field.

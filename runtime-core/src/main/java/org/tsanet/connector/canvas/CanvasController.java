@@ -451,8 +451,15 @@ public class CanvasController {
                         + " partner={} test={}",
                 link.token(), link.workspaceId(), link.conversationId(), link.ticketId(),
                 link.partnerDisplay(), link.testCase());
-        queue.offer(new InboundEvent(InboundEvent.Source.CONNECTOR, AnnotationHandler.KIND,
-                link.token(), Instant.now(), Map.of("token", link.token(), "attempt", 1)));
+        boolean queued = queue.offer(new InboundEvent(InboundEvent.Source.CONNECTOR,
+                AnnotationHandler.KIND, link.token(), Instant.now(),
+                Map.of("token", link.token(), "attempt", 1)));
+        if (!queued) {
+            // The audit line + link table are the manual re-drive path (D10); a full
+            // queue must never eat an annotation silently.
+            log.error("tsanet_audit event=annotation_enqueue_failed token={} ticket={}",
+                    link.token(), link.ticketId());
+        }
     }
 
     private static String stringOrNull(Object o) {
