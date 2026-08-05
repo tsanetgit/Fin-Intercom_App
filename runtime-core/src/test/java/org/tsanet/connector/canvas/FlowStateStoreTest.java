@@ -42,6 +42,26 @@ class FlowStateStoreTest {
     }
 
     @Test
+    void protectedEldestDoesNotJamEvictionForOthers() {
+        // tsanetgit/Fin-Intercom_App#3: removeEldestEntry only ever consulted THE
+        // eldest, so one abandoned UNRESOLVED flow at the LRU end disabled eviction
+        // entirely (QA probe: an early DRAFT survived 2000 inserts over capacity).
+        // Eviction must walk PAST protected flows, not stop at them.
+        FlowStateStore store = new FlowStateStore();
+        OutboundFlowState unresolved = store.create(); // eldest, protected
+        unresolved.beginSubmit();
+        unresolved.submitUnresolved();
+        OutboundFlowState draft = store.create(); // second-eldest, evictable
+        for (int i = 0; i < OVER_CAPACITY; i++) {
+            store.create();
+        }
+        assertNull(store.find(draft.flowId()),
+                "a protected eldest must not disable eviction for evictable flows behind it");
+        assertNotNull(store.find(unresolved.flowId()),
+                "the protected flow itself still survives");
+    }
+
+    @Test
     void ttlExpiresDraftButNeverUnresolvedFlows() {
         MutableClock clock = new MutableClock(Instant.parse("2026-08-05T00:00:00Z"));
         FlowStateStore store = new FlowStateStore(clock);
