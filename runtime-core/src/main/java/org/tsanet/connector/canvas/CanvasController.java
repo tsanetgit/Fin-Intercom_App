@@ -259,6 +259,17 @@ public class CanvasController {
     private static final Pattern BOLD_CLOSE = Pattern.compile("(?i)</(?:strong|b)\\s*>");
     private static final Pattern OTHER_TAGS = Pattern.compile("(?s)<[^>]+>");
     private static final Pattern NUMERIC_ENTITY = Pattern.compile("&#(x[0-9a-fA-F]{1,6}|[0-9]{1,7});");
+    /**
+     * The character-class half of parity with SdkTsanetGateway.problemDetail's
+     * cleanup (neutralizeBrackets carries the bracket half): invisible formatting
+     * and control characters (U+202E RTL override, zero-width spaces, line/para
+     * separators, C1 controls — (?U) keeps Cntrl from collapsing to ASCII) must
+     * not reach an agent card, where they can visually reorder an escalation
+     * note. \r\n\t are excluded only because the next normalization turns them
+     * into spaces and \n is later reserved as the break sentinel.
+     */
+    private static final Pattern FORMAT_CHARS = Pattern.compile(
+            "(?U)[\\p{Cntrl}\\p{Cf}\\p{Zl}\\p{Zp}&&[^\\r\\n\\t]]+");
 
     private static void addNoteComponents(List<Map<String, Object>> components, String prefix, String html) {
         List<String> paragraphs = htmlNoteParagraphs(html);
@@ -282,15 +293,20 @@ public class CanvasController {
         }
         // Identity fast-path: plain text has nothing to convert or neutralize.
         // Raw newlines/tabs disqualify so every output honors the one-paragraph-
-        // per-line invariant the slow path establishes.
+        // per-line invariant the slow path establishes; formatting/control
+        // characters (NUL included) disqualify so the strip below cannot be
+        // bypassed by skipping the slow path.
         if (html.indexOf('<') < 0 && html.indexOf('&') < 0
                 && html.indexOf('[') < 0 && html.indexOf(']') < 0
-                && html.indexOf('\n') < 0 && html.indexOf('\r') < 0 && html.indexOf('\t') < 0) {
+                && html.indexOf('\n') < 0 && html.indexOf('\r') < 0 && html.indexOf('\t') < 0
+                && !FORMAT_CHARS.matcher(html).find()) {
             String trimmed = html.trim();
             return trimmed.isEmpty() ? List.of() : List.of(trimmed);
         }
         // NUL is the placeholder alphabet below; partner text must not supply it.
         String s = html.replace("\u0000", "");
+        // Before any sentinel exists, so hrefs and anchor text are covered too.
+        s = FORMAT_CHARS.matcher(s).replaceAll(" ");
         s = DROP_WITH_CONTENT.matcher(s).replaceAll(" ");
         // Raw newlines are HTML whitespace; \n is reserved as the break sentinel.
         s = s.replaceAll("[\\r\\n\\t]+", " ");
@@ -353,17 +369,81 @@ public class CanvasController {
         if (text.isEmpty()) {
             text = neutralizeBrackets(url);
         }
+        String target = suffixTarget(url, scheme);
         // These four break markdown link parsing mid-URL; any whitespace ends it —
         // including a newline minted by an entity like &#10;, so encode all of \s.
-        url = url.replace("(", "%28").replace(")", "%29")
-                .replace("[", "%5B").replace("]", "%5D").replaceAll("\\s", "%20");
-        return "[" + text + "](" + url + ")";
+        // (?U) so Unicode spaces (U+00A0, U+3000) encode instead of riding raw.
+        String encoded = url.replace("(", "%28").replace(")", "%29")
+                .replace("[", "%5B").replace("]", "%5D").replaceAll("(?U)\\s", "%20");
+        String link = "[" + text + "](" + encoded + ")";
+        // QA design note on #6, Shawn's call: show where a link goes, because the
+        // text and the target can diverge freely within the allowlist. Skipped when
+        // the text already shows it (autolinks, bare-address mailtos).
+        if (target.isEmpty() || text.equalsIgnoreCase(neutralizeBrackets(url))
+                || text.equalsIgnoreCase(target)) {
+            return link;
+        }
+        return link + " (" + target + ")";
+    }
+
+    /**
+     * The agent-visible target for the link suffix: the host for http(s), the
+     * address for mailto, empty for anything unparseable (never emit "()").
+     * Userinfo splits on the LAST "@" — that is the anti-phish point:
+     * https://microsoft.com@evil.example must show evil.example.
+     */
+    private static String suffixTarget(String url, String scheme) {
+        if (scheme.startsWith("mailto:")) {
+            String address = url.substring("mailto:".length());
+            int query = address.indexOf('?');
+            if (query >= 0) {
+                address = address.substring(0, query);
+            }
+            return neutralizeBrackets(stripWhitespace(address));
+        }
+        int schemeEnd = url.indexOf("://");
+        if (schemeEnd < 0) {
+            return "";
+        }
+        String authority = url.substring(schemeEnd + 3).split("[/?#]", 2)[0];
+        int userinfo = authority.lastIndexOf('@');
+        if (userinfo >= 0) {
+            authority = authority.substring(userinfo + 1);
+        }
+        // Ports are noise for the deception check; the host is the point. Strip
+        // only a real trailing port so a portless IPv6 literal keeps its colons.
+        authority = authority.startsWith("[")
+                ? authority.replaceFirst("(?<=\\]):\\d+$", "")
+                : authority.replaceFirst(":\\d+$", "");
+        return neutralizeBrackets(stripWhitespace(authority));
+    }
+
+    /** No whitespace may survive into the suffix: the target rides in body text,
+     * where an entity-minted \n (&#10; is the one decodable control) would let
+     * the final paragraph split truncate the very host this suffix exists to
+     * show. (?U) is load-bearing — without it \s is ASCII-only and a U+00A0 or
+     * U+3000 splits the suffix into two tokens, the deception class the suffix
+     * exists to defeat (PR #8 QA round). Hosts and addresses contain no
+     * legitimate whitespace, so strip. */
+    private static String stripWhitespace(String s) {
+        return s.replaceAll("(?U)\\s+", "");
     }
 
     private static String cleanLinkText(String inner) {
         String text = OTHER_TAGS.matcher(inner).replaceAll(" ");
         text = neutralizeBrackets(decodeEntities(text));
-        return text.replaceAll("\\s{2,}", " ").trim();
+        // ALL whitespace collapses (link text is single-line by construction): an
+        // entity-minted \n here would otherwise let the final paragraph split cut
+        // the generated link apart — the exact thing the ordering rules promise
+        // cannot happen.
+        return text.replaceAll("\\s+", " ").trim();
+    }
+
+    /** Categories the FORMAT_CHARS strip removes; entities must not re-mint them. */
+    private static boolean invisibleClass(int codePoint) {
+        int type = Character.getType(codePoint);
+        return type == Character.CONTROL || type == Character.FORMAT
+                || type == Character.LINE_SEPARATOR || type == Character.PARAGRAPH_SEPARATOR;
     }
 
     private static String decodeEntities(String s) {
@@ -376,12 +456,20 @@ public class CanvasController {
                 int codePoint = digits.startsWith("x") || digits.startsWith("X")
                         ? Integer.parseInt(digits.substring(1), 16)
                         : Integer.parseInt(digits);
-                // NUL stays excluded (placeholder alphabet), and so does the surrogate
-                // range: isValidCodePoint(0xD800) is true but toChars would emit a lone
-                // surrogate — ill-formed UTF-16 that can break the canvas JSON downstream.
-                if (Character.isValidCodePoint(codePoint) && codePoint != 0
+                // Surrogates stay excluded: isValidCodePoint(0xD800) is true but
+                // toChars would emit a lone surrogate — ill-formed UTF-16 that can
+                // break the canvas JSON downstream. Entities must not mint what the
+                // raw-input FORMAT_CHARS strip removes (NUL and the placeholder
+                // alphabet included, they are CONTROL); \n alone stays decodable so
+                // &#10; keeps splitting body paragraphs. Refused-because-invisible
+                // becomes a space, mirroring the raw strip, so &#9; layout does not
+                // merge the words around it (PR #8 QA round); malformed and
+                // surrogate entities still vanish entirely.
+                if (Character.isValidCodePoint(codePoint)
                         && !(codePoint >= 0xD800 && codePoint <= 0xDFFF)) {
-                    replacement = new String(Character.toChars(codePoint));
+                    replacement = codePoint == '\n' || !invisibleClass(codePoint)
+                            ? new String(Character.toChars(codePoint))
+                            : " ";
                 }
             } catch (NumberFormatException ignored) {
                 // malformed entity: drop it
@@ -396,7 +484,8 @@ public class CanvasController {
                 .replace("&amp;", "&");
     }
 
-    /** Same defense as the SDK gateway's problem+json detail cleanup: literal
+    /** The bracket half of the defense SdkTsanetGateway.problemDetail applies to
+     * agent-visible text (FORMAT_CHARS carries the character-class half): literal
      * bracket syntax in untrusted text must not become a live markdown link. */
     private static String neutralizeBrackets(String s) {
         return s.replace("[", "(").replace("]", ")");
