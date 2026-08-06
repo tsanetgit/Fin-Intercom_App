@@ -133,9 +133,15 @@ The canvas flow was built against a failure-injectable FakeTsanetGateway whose
 fixtures mirror the Connect API contract, with an abstract gateway contract test that
 the SDK-backed gateway must also pass in slice 2; the fake refuses to start under the
 prod profile. Component shapes for input/textarea/single-select follow the Canvas Kit
-reference and get re-verified on a live workspace render before slice 1 is called
-done; `input_values` parsing is likewise asserted live (our spike canvases had no
-inputs, so those payload keys are documented-but-not-yet-observed).
+reference. All three were verified on a live workspace render 2026-08-05/06:
+Microsoft | Standard rendered input and textarea fields, Dell | Global Support
+rendered all 4 single-selects, and `input_values` was observed on the wire
+(`{"q": "microsoft"}` on the search submit). The same check settled the formatting
+question: canvas text renders markdown links and bold only, never HTML. Partner
+notes arrive as partner-authored HTML and are converted to canvas markdown at the
+presentation boundary (#6), with literal and entity-encoded link syntax neutralized
+so generated links are the only live link syntax. Known rendering caveat: #7
+(single-select option labels truncate at default panel width on option-heavy forms).
 
 ## D9. SDK gateway: generated client, per-member pairing, bounded and sanitized
 
