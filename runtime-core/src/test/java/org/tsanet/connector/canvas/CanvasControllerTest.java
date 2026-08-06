@@ -235,15 +235,32 @@ class CanvasControllerTest {
     }
 
     @Test
-    void entityMintedInvisiblesAreRefusedButNewlineSurvives() {
-        // Entities must not re-mint what the raw strip removes...
-        assertEquals(List.of("abc"),
+    void entityMintedInvisiblesBecomeSpacesButNewlineSurvives() {
+        // Entities must not re-mint what the raw strip removes; the refusal
+        // mirrors the raw strip's space so &#9; layout does not merge words
+        // (PR #8 QA round: ContactNOCimmediately)...
+        assertEquals(List.of("a b c"),
                 CanvasController.htmlNoteParagraphs("a&#8238;b&#x202E;c<br>"));
-        assertEquals(List.of("abc"),
+        assertEquals(List.of("a b c"),
                 CanvasController.htmlNoteParagraphs("a&#9;b&#13;c<br>"));
         // ...except \n: &#10; in body text still buys a paragraph break.
         assertEquals(List.of("a", "b"),
                 CanvasController.htmlNoteParagraphs("a&#10;b"));
+    }
+
+    @Test
+    void unicodeSpacesAreStrippedFromTheSuffixAndEncodedInTheUrl() {
+        // Java's plain \s is ASCII-only; without (?U) a U+00A0 or U+3000 in the
+        // authority rides raw into the destination AND splits the suffix into
+        // two tokens, letting an agent anchor on the benign-looking first half
+        // (PR #8 QA round, the blocking find).
+        assertEquals(List.of("[docs](https://good.example%20.evil/) (good.example.evil)"),
+                CanvasController.htmlNoteParagraphs(
+                        "<a href=\"https://good.example&#160;.evil/\">docs</a>"));
+        assertEquals(List.of("[docs](https://good.example%20.evil/) (good.example.evil)"),
+                CanvasController.htmlNoteParagraphs(
+                        "<a href=\"https://good.example" + Character.toString(0x3000)
+                                + ".evil/\">docs</a>"));
     }
 
     @Test

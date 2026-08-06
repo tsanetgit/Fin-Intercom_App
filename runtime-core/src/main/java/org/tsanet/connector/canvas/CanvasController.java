@@ -372,8 +372,9 @@ public class CanvasController {
         String target = suffixTarget(url, scheme);
         // These four break markdown link parsing mid-URL; any whitespace ends it —
         // including a newline minted by an entity like &#10;, so encode all of \s.
+        // (?U) so Unicode spaces (U+00A0, U+3000) encode instead of riding raw.
         String encoded = url.replace("(", "%28").replace(")", "%29")
-                .replace("[", "%5B").replace("]", "%5D").replaceAll("\\s", "%20");
+                .replace("[", "%5B").replace("]", "%5D").replaceAll("(?U)\\s", "%20");
         String link = "[" + text + "](" + encoded + ")";
         // QA design note on #6, Shawn's call: show where a link goes, because the
         // text and the target can diverge freely within the allowlist. Skipped when
@@ -420,9 +421,12 @@ public class CanvasController {
     /** No whitespace may survive into the suffix: the target rides in body text,
      * where an entity-minted \n (&#10; is the one decodable control) would let
      * the final paragraph split truncate the very host this suffix exists to
-     * show. Hosts and addresses contain no legitimate whitespace, so strip. */
+     * show. (?U) is load-bearing — without it \s is ASCII-only and a U+00A0 or
+     * U+3000 splits the suffix into two tokens, the deception class the suffix
+     * exists to defeat (PR #8 QA round). Hosts and addresses contain no
+     * legitimate whitespace, so strip. */
     private static String stripWhitespace(String s) {
-        return s.replaceAll("\\s+", "");
+        return s.replaceAll("(?U)\\s+", "");
     }
 
     private static String cleanLinkText(String inner) {
@@ -457,11 +461,15 @@ public class CanvasController {
                 // break the canvas JSON downstream. Entities must not mint what the
                 // raw-input FORMAT_CHARS strip removes (NUL and the placeholder
                 // alphabet included, they are CONTROL); \n alone stays decodable so
-                // &#10; keeps splitting body paragraphs.
+                // &#10; keeps splitting body paragraphs. Refused-because-invisible
+                // becomes a space, mirroring the raw strip, so &#9; layout does not
+                // merge the words around it (PR #8 QA round); malformed and
+                // surrogate entities still vanish entirely.
                 if (Character.isValidCodePoint(codePoint)
-                        && !(codePoint >= 0xD800 && codePoint <= 0xDFFF)
-                        && (codePoint == '\n' || !invisibleClass(codePoint))) {
-                    replacement = new String(Character.toChars(codePoint));
+                        && !(codePoint >= 0xD800 && codePoint <= 0xDFFF)) {
+                    replacement = codePoint == '\n' || !invisibleClass(codePoint)
+                            ? new String(Character.toChars(codePoint))
+                            : " ";
                 }
             } catch (NumberFormatException ignored) {
                 // malformed entity: drop it
