@@ -3,6 +3,7 @@ package org.tsanet.connector.canvas;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Method;
@@ -23,9 +24,13 @@ import org.tsanet.connector.sdk.SdkTsanetGateway;
  * the same invisible-character categories (Cntrl/Cf/Zl/Zp); this fixture covers
  * one representative per category so widening or narrowing either side alone
  * fails here instead of drifting silently (PR #8 QA round, blast-radius item 7:
- * duplication asserted by a check, not a comment). The canvas side's documented
- * deviation (\r\n\t handled by whitespace normalization, \n reserved as the
- * break sentinel) is outside the fixture on purpose. problemDetail is private;
+ * duplication asserted by a check, not a comment). Narrowing is caught by the
+ * INVISIBLES fixture (absence asserted); widening by the MUST_SURVIVE fixture
+ * (presence asserted) — QA's round-2 mutation test showed the absence fixture
+ * alone is blind to a class growing, which is the direction where the canvas
+ * renders what the gateway rejects. The canvas side's documented deviation
+ * (\r\n\t handled by whitespace normalization, \n reserved as the break
+ * sentinel) is outside both fixtures on purpose. problemDetail is private;
  * reflection is the price of asserting the real method instead of a third copy
  * of the class.
  */
@@ -61,6 +66,36 @@ class InvisibleCharParityTest {
             assertNotNull(detail, hex + ": detail must survive as text, not be nulled");
             assertFalse(detail.contains(character),
                     hex + " must not survive problemDetail");
+        }
+    }
+
+    private static final int[] MUST_SURVIVE = {
+            0x00E9,  // é — letter: any widening that eats letters mangles prose
+            0x2192,  // right arrow — symbol, pinned in partner-note tests too
+            0x00A0,  // no-break space — Zs, deliberately OUTSIDE both classes:
+                     // adding \p{Zs} to either side is the canonical silent widening
+    };
+
+    @Test
+    void bothSanitizersPreserveEveryMustSurviveCharacter() throws Exception {
+        for (int codePoint : MUST_SURVIVE) {
+            String character = new String(Character.toChars(codePoint));
+            String hex = "U+%04X".formatted(codePoint);
+
+            String canvasRaw = String.join(" ",
+                    CanvasController.htmlNoteParagraphs("a" + character + "b"));
+            assertTrue(canvasRaw.contains(character),
+                    hex + " must survive the canvas converter (raw)");
+
+            String canvasEntity = String.join(" ",
+                    CanvasController.htmlNoteParagraphs("a&#" + codePoint + ";b<br>"));
+            assertTrue(canvasEntity.contains(character),
+                    hex + " must survive the canvas converter (entity-minted)");
+
+            String detail = problemDetail("a" + character + "b");
+            assertNotNull(detail, hex + ": detail must survive as text, not be nulled");
+            assertTrue(detail.contains(character),
+                    hex + " must survive problemDetail");
         }
     }
 
