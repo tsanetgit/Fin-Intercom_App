@@ -2,7 +2,6 @@ package org.tsanet.connector.canvas;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -65,26 +64,90 @@ class InvisibleCharParityTest {
             0x2029,  // Zp (paragraph separator)
     };
 
+    /**
+     * What every INVISIBLES probe must render as, on all three paths: the
+     * character becomes a space (measured against the real sanitizers, not
+     * assumed). Asserting this EXACT string rather than mere absence is half of
+     * the #11 fix — "the character is absent" is also what a probe that never
+     * minted produces, but "a b" is not, so equality tells the two apart at
+     * every entity width including the ones no canary can cover.
+     */
+    private static final String STRIPPED = "a b";
+
+    /**
+     * Visible characters minted through the identical a&#N;b path, one per
+     * decimal width the INVISIBLES probes use. They prove the probe still works
+     * before any absence assertion is trusted: see #11, where a widening that
+     * ate the probe alphabet made this whole test pass while the sanitizer was
+     * broken.
+     *
+     * <p>One canary per decimal width the probes use, because a decode cap is
+     * width-selective: with decoding capped at 4 digits, the 5-digit canary is
+     * the only assertion in this class that names the actual cause — the
+     * sibling tests pass, and STRIPPED equality does fail but later and far
+     * less specifically. Honest limit, measured rather than assumed: no fault
+     * was found that a wider canary catches while narrower ones pass outright,
+     * because anything that makes a wider literal collapse to STRIPPED also
+     * eats the shorter canaries' entities. Width parity buys attribution, not
+     * extra coverage. No 1-digit canary can exist (codepoints 0-9 are all C0
+     * controls), so width 1 rests on equality alone. Each entry was measured
+     * surviving this path against the real sanitizers before being added.
+     */
+    private static final int[] PROBE_CANARIES = {
+            0x00E9,  // 233,   3 digits — matches U+009D (157)
+            0x2192,  // 8594,  4 digits — matches U+202E, U+200B, U+2028, U+2029
+            0x4E2D,  // 20013, 5 digits — matches U+FEFF (65279)
+            // U+0007 (7) is 1 digit and uncoverable; equality carries that width.
+    };
+
     @Test
     void bothSanitizersStripEveryFixtureCategory() throws Exception {
+        assertEntityProbeStillMints();
         for (int codePoint : INVISIBLES) {
             String character = new String(Character.toChars(codePoint));
             String hex = "U+%04X".formatted(codePoint);
 
             String canvasRaw = String.join(" ",
                     CanvasController.htmlNoteParagraphs("a" + character + "b"));
-            assertFalse(canvasRaw.contains(character),
+            assertEquals(STRIPPED, canvasRaw,
                     hex + " must not survive the canvas converter (raw)");
 
             String canvasEntity = String.join(" ",
                     CanvasController.htmlNoteParagraphs("a&#" + codePoint + ";b<br>"));
-            assertFalse(canvasEntity.contains(character),
+            assertEquals(STRIPPED, canvasEntity,
                     hex + " must not survive the canvas converter (entity-minted)");
 
             String detail = problemDetail("a" + character + "b");
             assertNotNull(detail, hex + ": detail must survive as text, not be nulled");
-            assertFalse(detail.contains(character),
-                    hex + " must not survive problemDetail");
+            assertEquals(STRIPPED, detail, hex + " must not survive problemDetail");
+        }
+    }
+
+    /**
+     * Probe-integrity gate (#11). An absence assertion cannot distinguish "the
+     * sanitizer removed it" from "the probe never minted it", so anything that
+     * eats the probe alphabet — &, # and ; (Po) or the digits (Nd) — silently
+     * turns every entity-minted assertion in this test into a tautology.
+     * Demonstrated before the fix: with the entity invisible-refusal removed
+     * AND FORMAT_CHARS widened by \p{Po}, this test passed while the sanitizer
+     * was broken.
+     *
+     * <p>A hard assertion, never a JUnit assumption: an assumption SKIPS, and
+     * silently not running is the very failure mode being closed here.
+     */
+    private static void assertEntityProbeStillMints() {
+        for (int codePoint : PROBE_CANARIES) {
+            String decimal = Integer.toString(codePoint);
+            String actual = String.join(" ",
+                    CanvasController.htmlNoteParagraphs("a&#" + decimal + ";b<br>"));
+            assertEquals("a" + new String(Character.toChars(codePoint)) + "b", actual,
+                    "entity probe canary U+%04X (&#%s;, %d decimal digits) did not survive the"
+                            .formatted(codePoint, decimal, decimal.length())
+                            + " a&#N;b path. Either the probe alphabet (&, #, ; or the digits) is"
+                            + " being eaten, or entity decoding is now limited by codepoint value"
+                            + " or digit count — if the shorter canary passed and this one did"
+                            + " not, suspect the latter. Until this passes, every entity-minted"
+                            + " absence assertion in this test proves nothing (#11).");
         }
     }
 
