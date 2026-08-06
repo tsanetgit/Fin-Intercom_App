@@ -1,5 +1,6 @@
 package org.tsanet.connector.canvas;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -10,7 +11,11 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntFunction;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -97,31 +102,58 @@ class InvisibleCharParityTest {
                      // adding \p{Zs} to either side is the canonical silent widening
     };
 
+    /**
+     * Three sequential passes rather than one loop per character, and the order
+     * is the point: the entity probe is BUILT FROM the characters it tests
+     * around (&#N; is # and ; (Po) plus digits (Nd)), so a widening into those
+     * categories breaks the probe and the property at the same time. Running
+     * every bare-character assertion first means the honest failure is always
+     * the one reported: if the entity pass fails, the raw pass has already
+     * passed, so the syntax really was eaten and the property really does hold.
+     * That makes the advisory below true by construction instead of by comment
+     * — before this, a \p{Nd} widening reported "the probe broke" while
+     * silently also eating every case number (#9 QA round 2). assertAll within
+     * each pass so one character's failure does not hide its siblings.
+     */
     @Test
-    void bothSanitizersPreserveEveryMustSurviveCharacter() throws Exception {
-        for (int codePoint : MUST_SURVIVE) {
-            String character = new String(Character.toChars(codePoint));
-            String hex = "U+%04X".formatted(codePoint);
-
-            String canvasRaw = String.join(" ",
+    void bothSanitizersPreserveEveryMustSurviveCharacter() {
+        assertAll("canvas converter, bare characters", overFixture(codePoint -> () -> {
+            String character = character(codePoint);
+            String out = String.join(" ",
                     CanvasController.htmlNoteParagraphs("a" + character + "b"));
-            assertTrue(canvasRaw.contains(character),
-                    hex + " must survive the canvas converter (raw)");
-
-            String canvasEntity = String.join(" ",
+            assertTrue(out.contains(character),
+                    hex(codePoint) + " must survive the canvas converter (raw)");
+        }));
+        assertAll("canvas converter, entity-minted", overFixture(codePoint -> () -> {
+            String character = character(codePoint);
+            String out = String.join(" ",
                     CanvasController.htmlNoteParagraphs("a&#" + codePoint + ";b<br>"));
-            assertTrue(canvasEntity.contains(character),
-                    hex + " must survive the canvas converter (entity-minted); if this is"
-                            + " the FIRST failure, check the change did not eat the &#N;"
-                            + " syntax itself — it is built from # and ; (Po) and digits"
-                            + " (Nd), so widening into either breaks the probe rather than"
-                            + " the property it tests");
-
+            assertTrue(out.contains(character),
+                    hex(codePoint) + " must survive the canvas converter (entity-minted);"
+                            + " the bare-character pass above already passed, so this means"
+                            + " the &#N; syntax itself was eaten — repair the probe, the"
+                            + " property it tests still holds");
+        }));
+        assertAll("problemDetail", overFixture(codePoint -> () -> {
+            String character = character(codePoint);
             String detail = problemDetail("a" + character + "b");
-            assertNotNull(detail, hex + ": detail must survive as text, not be nulled");
+            assertNotNull(detail, hex(codePoint) + ": detail must survive as text, not be nulled");
             assertTrue(detail.contains(character),
-                    hex + " must survive problemDetail");
-        }
+                    hex(codePoint) + " must survive problemDetail");
+        }));
+    }
+
+    /** One probe applied across the whole fixture, as an assertAll pass. */
+    private static Stream<Executable> overFixture(IntFunction<Executable> probe) {
+        return IntStream.of(MUST_SURVIVE).mapToObj(probe);
+    }
+
+    private static String character(int codePoint) {
+        return new String(Character.toChars(codePoint));
+    }
+
+    private static String hex(int codePoint) {
+        return "U+%04X".formatted(codePoint);
     }
 
     /** Real partner-note prose, not "ab": a control made only of lowercase
