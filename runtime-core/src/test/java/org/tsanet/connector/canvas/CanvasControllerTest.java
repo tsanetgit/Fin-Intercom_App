@@ -107,7 +107,8 @@ class CanvasControllerTest {
         List<String> out = CanvasController.htmlNoteParagraphs(html);
         assertEquals(2, out.size());
         assertEquals("**How to find Tenant ID:** View the instructions."
-                + " [Find the Tenant ID in Azure](https://docs.microsoft.com/en-us/azure/active-directory).",
+                + " [Find the Tenant ID in Azure](https://docs.microsoft.com/en-us/azure/active-directory)"
+                + " (docs.microsoft.com).",
                 out.get(0));
         assertEquals("Send an email to [escalate@example.com](mailto:escalate@example.com)", out.get(1));
     }
@@ -140,15 +141,15 @@ class CanvasControllerTest {
 
     @Test
     void hrefEntitiesDecodeAndLinkBreakingCharactersAreEncoded() {
-        assertEquals(List.of("[docs](https://x.example/?a=1&b=2)"),
+        assertEquals(List.of("[docs](https://x.example/?a=1&b=2) (x.example)"),
                 CanvasController.htmlNoteParagraphs("<a href=\"https://x.example/?a=1&amp;b=2\">docs</a>"));
-        assertEquals(List.of("[docs](https://x.example/%28v2%29%20final)"),
+        assertEquals(List.of("[docs](https://x.example/%28v2%29%20final) (x.example)"),
                 CanvasController.htmlNoteParagraphs("<a href=\"https://x.example/(v2) final\">docs</a>"));
     }
 
     @Test
     void nestedTagsInsideAnchorTextAreFlattened() {
-        assertEquals(List.of("[Tenant ID](https://x.example/)"),
+        assertEquals(List.of("[Tenant ID](https://x.example/) (x.example)"),
                 CanvasController.htmlNoteParagraphs(
                         "<a href=\"https://x.example/\"><strong>Tenant ID</strong></a>"));
     }
@@ -210,8 +211,94 @@ class CanvasControllerTest {
     void entityMintedWhitespaceInsideAnHrefIsPercentEncoded() {
         // &#10; decodes to a newline inside the URL; unencoded it would split the
         // generated link across two paragraphs.
-        assertEquals(List.of("[docs](https://x.example/a%20b)"),
+        assertEquals(List.of("[docs](https://x.example/a%20b) (x.example)"),
                 CanvasController.htmlNoteParagraphs("<a href=\"https://x.example/a&#10;b\">docs</a>"));
+    }
+
+    @Test
+    void rawFormatAndControlCharactersAreStripped() {
+        // QA note on #6: U+202E (RTL override), U+200B, U+2028, U+FEFF reached the
+        // agent card while problemDetail strips the same class. Parity now holds.
+        assertEquals(List.of("Call the duty manager now"),
+                CanvasController.htmlNoteParagraphs(
+                        "<p>Call \u202Ethe duty\u200B manager\u2028now\uFEFF</p>"));
+    }
+
+    @Test
+    void plainTextFormatCharsAndNulDisqualifyTheFastPath() {
+        // Without the disqualifier the identity fast-path would return these
+        // verbatim, bypassing the strip (QA note 2: the fast-path NUL leak).
+        assertEquals(List.of("Call the duty manager"),
+                CanvasController.htmlNoteParagraphs("Call \u202Ethe duty manager"));
+        assertEquals(List.of("ab"),
+                CanvasController.htmlNoteParagraphs("a\u0000b"));
+    }
+
+    @Test
+    void entityMintedInvisiblesAreRefusedButNewlineSurvives() {
+        // Entities must not re-mint what the raw strip removes...
+        assertEquals(List.of("abc"),
+                CanvasController.htmlNoteParagraphs("a&#8238;b&#x202E;c<br>"));
+        assertEquals(List.of("abc"),
+                CanvasController.htmlNoteParagraphs("a&#9;b&#13;c<br>"));
+        // ...except \n: &#10; in body text still buys a paragraph break.
+        assertEquals(List.of("a", "b"),
+                CanvasController.htmlNoteParagraphs("a&#10;b"));
+    }
+
+    @Test
+    void anchorTextEntityNewlineCannotSplitTheLink() {
+        // An entity-minted \n in link text would let the final paragraph split cut
+        // the generated link apart, leaking bracket fragments.
+        assertEquals(List.of("[a b](https://ok.test) (ok.test)"),
+                CanvasController.htmlNoteParagraphs("<a href=\"https://ok.test\">a&#10;b</a>"));
+    }
+
+    @Test
+    void hostSuffixShowsTheRealHost() {
+        // Userinfo splits on the LAST @: the text says microsoft, the suffix must
+        // say where the link actually goes.
+        assertEquals(List.of("[Microsoft docs](https://microsoft.com@evil.example/x) (evil.example)"),
+                CanvasController.htmlNoteParagraphs(
+                        "<a href=\"https://microsoft.com@evil.example/x\">Microsoft docs</a>"));
+    }
+
+    @Test
+    void hostSuffixSkipsWhenTextAlreadyShowsTheTarget() {
+        // Autolink: text equals the URL.
+        assertEquals(List.of("[https://ok.test](https://ok.test)"),
+                CanvasController.htmlNoteParagraphs("<a href=\"https://ok.test\">https://ok.test</a>"));
+        // Text equals the host.
+        assertEquals(List.of("[ok.test](https://ok.test/deep/path)"),
+                CanvasController.htmlNoteParagraphs("<a href=\"https://ok.test/deep/path\">ok.test</a>"));
+        // Bare-address mailto (the live Microsoft escalation shape).
+        assertEquals(List.of("[x@y.example](mailto:x@y.example)"),
+                CanvasController.htmlNoteParagraphs("<a href=\"mailto:x@y.example\">x@y.example</a>"));
+    }
+
+    @Test
+    void hostSuffixHandlesPortsIpv6AndMailtoQuery() {
+        assertEquals(List.of("[console](https://host.example:8443/x) (host.example)"),
+                CanvasController.htmlNoteParagraphs("<a href=\"https://host.example:8443/x\">console</a>"));
+        // Portless IPv6 keeps its colons; brackets neutralize in the suffix.
+        assertEquals(List.of("[local](https://%5B::1%5D/x) ((::1))"),
+                CanvasController.htmlNoteParagraphs("<a href=\"https://[::1]/x\">local</a>"));
+        assertEquals(List.of("[local](https://%5B::1%5D:8443/x) ((::1))"),
+                CanvasController.htmlNoteParagraphs("<a href=\"https://[::1]:8443/x\">local</a>"));
+        assertEquals(List.of("[write us](mailto:x@y.example?subject=Hi) (x@y.example)"),
+                CanvasController.htmlNoteParagraphs("<a href=\"mailto:x@y.example?subject=Hi\">write us</a>"));
+    }
+
+    @Test
+    void entityNewlineInTheAuthorityCannotTruncateTheSuffix() {
+        // &#10; is the one decodable control; in the authority it would put a raw
+        // \n into the suffix and the final paragraph split would display a
+        // truncated host — the anti-phish feature lying. Whitespace strips.
+        assertEquals(List.of("[docs](https://good.example%20.evil/) (good.example.evil)"),
+                CanvasController.htmlNoteParagraphs(
+                        "<a href=\"https://good.example&#10;.evil/\">docs</a>"));
+        assertEquals(List.of("[write](mailto:x%20@y.example) (x@y.example)"),
+                CanvasController.htmlNoteParagraphs("<a href=\"mailto:x&#10;@y.example\">write</a>"));
     }
 
     @Test
