@@ -161,9 +161,17 @@ class InvisibleCharParityTest {
             0x00C9,  // É — Lu, uppercase letter (the #9 counterexample)
             0x0034,  // 4 — Nd, digit: case numbers and versions are made of these
             0x2192,  // right arrow — Sm, symbol, pinned in partner-note tests too
+            0x4E2D,  // 中 — Lo, ideograph: real prose for Asian members, and the
+                     // category PROBE_CANARIES' 5-digit entry is made of
             0x00A0,  // no-break space — Zs, deliberately OUTSIDE both classes:
                      // adding \p{Zs} to either side is the canonical silent widening
     };
+    // INVARIANT (#12 QA round): every PROBE_CANARIES category appears above.
+    // A canary can only report "the probe looks broken"; naming the sanitizer as
+    // the culprit takes a MUST_SURVIVE entry. While 0x4E2D was a canary alone,
+    // widening the entity gate by \p{Lo} left the canary as the only failing
+    // assertion in the class, blaming the probe alphabet or a digit cap —
+    // neither of which was the cause. Add a canary, add its category here.
 
     /**
      * Three sequential passes rather than one loop per character, and the order
