@@ -10,6 +10,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual lever. During the 2026-08-06 Actions incident, webhook throttling
+  # stopped push and pull_request events from creating runs at all, and without
+  # this there was no way to ask for CI on a given commit — the only "runs" were
+  # hours-stale queued ones the API simultaneously reported as completed.
+  # Caveat that decides when this starts helping: GitHub only offers the manual
+  # trigger for workflow files present on the DEFAULT branch, so this does
+  # nothing until it reaches main. From there it runs against any ref:
+  #   gh workflow run ci.yml --ref <branch>
+  workflow_dispatch:
 
 jobs:
   core:
