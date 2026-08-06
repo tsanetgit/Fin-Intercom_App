@@ -1,7 +1,14 @@
 name: ci
 
 on:
+  # Branch-filtered on purpose: an unfiltered `push` alongside `pull_request`
+  # runs every job TWICE on the same commit whenever a branch has a PR open.
+  # PRs validate on the merge ref; main verifies post-merge. A branch with no
+  # PR open gets no CI — open a draft PR to get it. NOTE: this also stops tag
+  # pushes from triggering ci (nothing depends on that today: zero tags, no
+  # release workflow); a future release workflow needs its own `tags:` trigger.
   push:
+    branches: [main]
   pull_request:
 
 jobs:
