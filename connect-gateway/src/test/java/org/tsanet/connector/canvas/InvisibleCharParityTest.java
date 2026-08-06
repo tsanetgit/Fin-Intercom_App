@@ -107,13 +107,22 @@ class InvisibleCharParityTest {
      * is the point: the entity probe is BUILT FROM the characters it tests
      * around (&#N; is # and ; (Po) plus digits (Nd)), so a widening into those
      * categories breaks the probe and the property at the same time. Running
-     * every bare-character assertion first means the honest failure is always
-     * the one reported: if the entity pass fails, the raw pass has already
-     * passed, so the syntax really was eaten and the property really does hold.
-     * That makes the advisory below true by construction instead of by comment
-     * — before this, a \p{Nd} widening reported "the probe broke" while
-     * silently also eating every case number (#9 QA round 2). assertAll within
-     * each pass so one character's failure does not hide its siblings.
+     * every bare-character assertion first means a real bare-character failure
+     * is never masked by a broken probe — before this, a \p{Nd} widening
+     * reported "the probe broke" while silently eating every case number (#9 QA
+     * round 2). assertAll within each pass so one character's failure does not
+     * hide its siblings.
+     *
+     * <p>Ordering NARROWS the cause of an entity-pass failure; it does not
+     * determine it, and the message must not pretend otherwise (#10 QA round).
+     * The two paths cross two INDEPENDENT gates: FORMAT_CHARS strips raw input,
+     * while decodeEntities applies invisibleClass() to what it mints, and
+     * entity-minted characters never re-enter FORMAT_CHARS. A passing bare pass
+     * therefore rules out FORMAT_CHARS drift and nothing more. Demonstrated:
+     * widening ONLY invisibleClass() by SPACE_SEPARATOR leaves U+00A0's bare
+     * assertion passing and fails just the entity one — a true positive that an
+     * earlier version of this message told the reader to dismiss as a broken
+     * probe.
      */
     @Test
     void bothSanitizersPreserveEveryMustSurviveCharacter() {
@@ -129,10 +138,17 @@ class InvisibleCharParityTest {
             String out = String.join(" ",
                     CanvasController.htmlNoteParagraphs("a&#" + codePoint + ";b<br>"));
             assertTrue(out.contains(character),
-                    hex(codePoint) + " must survive the canvas converter (entity-minted);"
-                            + " the bare-character pass above already passed, so this means"
-                            + " the &#N; syntax itself was eaten — repair the probe, the"
-                            + " property it tests still holds");
+                    hex(codePoint) + " must survive the canvas converter (entity-minted)."
+                            + " The bare pass passed, which rules out FORMAT_CHARS drift but"
+                            + " NOT the entity gate: entity-minted characters never re-enter"
+                            + " FORMAT_CHARS, so invisibleClass() inside decodeEntities is a"
+                            + " second, independent gate. Two causes fit. (1) The &#N; syntax"
+                            + " was eaten before decoding — repair the probe, the property"
+                            + " holds. (2) invisibleClass() now refuses this character — a"
+                            + " REAL widening of the entity gate; do not dismiss it. Tell them"
+                            + " apart by the blast radius: if every entity probe fails, suspect"
+                            + " the syntax; if only this character's does, suspect the gate"
+                            + " widening into its category.");
         }));
         assertAll("problemDetail", overFixture(codePoint -> () -> {
             String character = character(codePoint);
