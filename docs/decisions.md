@@ -226,3 +226,76 @@ the token so the manual re-drive path holds even then. One more honest gap: HIDD
 form fields are ASSUMED to be filled server-side from the form template (no live
 receipt yet - sdk2's form has none); if the API instead expects the client to echo
 template values, submission fails loud and problem+json detail names the field.
+
+## D11. The link table is durable, on SQLite, and the volume is part of the design
+
+D10 named link-table persistence as a Phase-2 precondition rather than a nice-to-have:
+without it a restart loses every token -> ticket route, and no pre-restart case can be
+answered. `SqliteSubmissionLinkTable` is that store, behind the unchanged
+`SubmissionLinkTable` interface. SQLite because the pilot is one container and this
+adds no infrastructure; Postgres at GA is then a DataSource swap rather than a rewrite,
+which is why the DAO uses raw JDBC and short-lived connections instead of a shared
+`Connection` (also: sqlite-jdbc connections are not safely shared, and the event drain
+and canvas threads both write - hence `busy_timeout=5000`).
+
+Three choices carry the durability claim, and each has a cheaper-looking alternative
+that quietly breaks it:
+
+- **`synchronous=FULL`**, not NORMAL. Under WAL, NORMAL survives an application crash
+  but can lose the last commits to power loss - a `record()` that returned while the
+  link vanished, which is precisely the outcome D10 forbids. Write volume is one row
+  per case submission, so the fsync is free in practice.
+- **`ON CONFLICT(token) DO NOTHING`**, never `INSERT OR IGNORE`. OR IGNORE suppresses
+  *every* constraint failure, so a malformed link (null token, null internal case
+  number) disappears with no error and the case has no route home. Pinned by
+  `aMalformedLinkThrowsInsteadOfVanishing`, which fails when the statement is swapped
+  back (verified by mutation, not by reading).
+- **Every `SQLException` surfaces unchecked.** A logged-and-swallowed `record()` failure
+  means the partner case exists and nothing points at it; the loud failure at submit
+  time is the honest one. Same reasoning for `annotation_state`: it is parsed with
+  `valueOf`, so an unreadable value throws rather than reading as NONE and re-running a
+  completed annotation.
+
+D3 ("verify effects, never trust a bare 200") does not extend to this store as a
+read-back: it exists because a remote mutation can succeed without saying so, and a local
+ACID `UPDATE` already answers — the rowcount is the receipt, so a state write that matched
+no link warns rather than passing silently. `annotation_state` assumes a single writer
+(the drain), which holds because the drain only writes state for a token it has already
+found here (`AnnotationHandler` returns `link_missing` otherwise); a multi-threaded drain
+would need a compare-and-set instead.
+
+The routing semantics are now pinned by `SubmissionLinkTableContractTest`, which both
+stores run: first-record-wins on replay (including annotation progress), newest-first
+ordering for the several cases one conversation can anchor, and the FIRST recorded token
+owning a duplicated `internalCaseNumber` - two links can share one, that is D2's residual
+duplicate window, and reconcile must keep answering with the same case it answered with
+before. A replay drops the whole row, so its *new* secondary keys register nowhere; that
+is asserted separately from the identical-keys replay, which cannot tell an index that was
+skipped from one rewritten to the same value. Null keys answer empty on all three lookups
+rather than throwing, because they arrive for real (a webhook payload without its token, a
+ticketless link with no conversation) and an NPE there kills the event drain. That last one
+is not a hypothetical: the contract's first run caught `byConversationId(null)` answering
+empty in SQL and NPE-ing in the map store.
+
+Selection is `connector.links.store` (`memory` default, `sqlite` durable), and every way
+of reaching production without a durable store is refused at startup rather than
+discovered after a restart. The memory store refuses the prod profile the way the fake
+gateways do. A store value that selects neither bean is rejected by name, because the
+alternative is a `NoSuchBeanDefinitionException` that names no cause; the validation
+mirrors `@ConditionalOnProperty` exactly - case-insensitive, no trimming, both measured
+rather than assumed (`LinkTableConfigurationTest`), so `SQLITE` wires the durable store
+while `sqlite ` from an env var is refused. Note for anyone testing this: Spring's
+`withPropertyValues` trims its `k=v` strings, so a whitespace case written that way passes
+while measuring nothing - inject a raw `MapPropertySource`.
+
+**Deployment precondition, and the slice is theater without it: the SQLite file must
+live on storage that outlives the container.** On a container overlay filesystem this
+class is exactly as volatile as the maps it replaces, and no code here can detect the
+difference - so the absolute path is logged at boot, `store=sqlite` with a blank path
+refuses to start, and the Azure Container Apps volume mount is a deployment requirement
+rather than a deployment detail. The shipped default `data/links.db` is **dev-only** for
+exactly this reason: under the prod profile a relative path is refused, since it resolves
+against the container working directory and would otherwise be the one remaining way to
+look durable and not be. Named non-goal: this store is single-node. The day the connector
+runs more than one replica, SQLite is wrong and the interface exists so that day costs a
+new implementation and nothing else.

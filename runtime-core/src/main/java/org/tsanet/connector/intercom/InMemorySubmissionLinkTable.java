@@ -8,10 +8,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
-/** Never-evicting in-memory link table (Phase 1); see the interface for why. */
-@Component
+/**
+ * Never-evicting in-memory link table (Phase 1); see the interface for why. Volatile by
+ * construction, so {@link LinkTableConfiguration} wires it only outside the prod profile;
+ * {@link SqliteSubmissionLinkTable} is the durable store (docs/decisions.md D11).
+ */
 public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
 
     private static final Logger log = LoggerFactory.getLogger(InMemorySubmissionLinkTable.class);
@@ -45,18 +47,32 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
         }
     }
 
+    // A null key answers empty on all three lookups rather than throwing: keys arrive
+    // from webhook payloads and from links whose optional fields are null, so
+    // ConcurrentHashMap.get(null) would NPE the event drain on a reachable path, and the
+    // SQL store answers empty for the same input. The contract pins them to one answer.
+
     @Override
     public Optional<SubmissionLink> byToken(String token) {
+        if (token == null) {
+            return Optional.empty();
+        }
         return Optional.ofNullable(byToken.get(token)).map(Entry::link);
     }
 
     @Override
     public Optional<SubmissionLink> byInternalCaseNumber(String internalCaseNumber) {
+        if (internalCaseNumber == null) {
+            return Optional.empty();
+        }
         return Optional.ofNullable(tokenByInternal.get(internalCaseNumber)).flatMap(this::byToken);
     }
 
     @Override
     public List<SubmissionLink> byConversationId(String conversationId) {
+        if (conversationId == null) {
+            return List.of();
+        }
         CopyOnWriteArrayList<String> tokens = tokensByConversation.get(conversationId);
         if (tokens == null) {
             return List.of();
