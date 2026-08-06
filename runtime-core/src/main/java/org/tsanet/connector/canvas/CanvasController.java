@@ -3,9 +3,12 @@ package org.tsanet.connector.canvas;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -212,12 +215,8 @@ public class CanvasController {
         if (notice != null) {
             components.add(CanvasKit.error(notice));
         }
-        if (form.adminNote() != null && !form.adminNote().isBlank()) {
-            components.add(CanvasKit.muted("Partner note: " + form.adminNote()));
-        }
-        if (form.escalationInstructions() != null && !form.escalationInstructions().isBlank()) {
-            components.add(CanvasKit.muted("Escalation: " + form.escalationInstructions()));
-        }
+        addNoteComponents(components, "Partner note: ", form.adminNote());
+        addNoteComponents(components, "Escalation: ", form.escalationInstructions());
         components.add(CanvasKit.input("summary", "Problem summary (required)", "One line", state.values().get("summary")));
         components.add(CanvasKit.textarea("description", "Problem description (required)", "What happened, impact, versions",
                 state.values().get("description")));
@@ -239,6 +238,168 @@ public class CanvasController {
         components.add(CanvasKit.button("submit_case", "Submit to partner"));
         components.add(CanvasKit.button("back_home", "Start over"));
         return CanvasKit.canvas(components, pointer(state));
+    }
+
+    // ---- partner note HTML -> canvas text ----
+    // TSANet process forms deliver adminNote/escalationInstructions as partner-authored
+    // HTML; Intercom canvas text renders ONLY markdown links [text](url) and **bold**,
+    // never HTML (Canvas Kit Text reference, verified live 2026-08-05). Converted at
+    // this presentation boundary; the gateway keeps the fields verbatim.
+
+    /** Payload guard, same motivation as MAX_RESULT_BUTTONS: one component per paragraph. */
+    private static final int MAX_NOTE_PARAGRAPHS = 8;
+
+    private static final Pattern DROP_WITH_CONTENT = Pattern.compile(
+            "(?is)<script\\b[^>]*>.*?</script>|<style\\b[^>]*>.*?</style>|<!--.*?-->");
+    private static final Pattern ANCHOR = Pattern.compile(
+            "(?is)<a\\b[^>]*?href\\s*=\\s*(?:\"(?<dq>[^\"]*)\"|'(?<sq>[^']*)'|(?<uq>[^\\s>]+))[^>]*>(?<text>.*?)</a>");
+    private static final Pattern BREAK_TAGS = Pattern.compile(
+            "(?i)</?(?:p|br|li|div|tr|ul|ol|table|h[1-6])\\b[^>]*/?>");
+    private static final Pattern BOLD_OPEN = Pattern.compile("(?i)<(?:strong|b)\\b[^>]*>");
+    private static final Pattern BOLD_CLOSE = Pattern.compile("(?i)</(?:strong|b)\\s*>");
+    private static final Pattern OTHER_TAGS = Pattern.compile("(?s)<[^>]+>");
+    private static final Pattern NUMERIC_ENTITY = Pattern.compile("&#(x[0-9a-fA-F]{1,6}|[0-9]{1,7});");
+
+    private static void addNoteComponents(List<Map<String, Object>> components, String prefix, String html) {
+        List<String> paragraphs = htmlNoteParagraphs(html);
+        for (int i = 0; i < paragraphs.size(); i++) {
+            // Prefix only the first paragraph; an empty conversion emits nothing at
+            // all (a raw-non-blank note like <p>&nbsp;</p> must not render a bare label).
+            components.add(CanvasKit.muted(i == 0 ? prefix + paragraphs.get(i) : paragraphs.get(i)));
+        }
+    }
+
+    /**
+     * Ordering is load-bearing: tags are handled before entities so decoded
+     * markup stays literal text, and entities before bracket neutralization so
+     * &#91;x&#93;(url) cannot smuggle live link syntax past the scheme check.
+     * Generated links are substituted last, after neutralization, so they are
+     * the only markdown link syntax that can reach the canvas.
+     */
+    static List<String> htmlNoteParagraphs(String html) {
+        if (html == null) {
+            return List.of();
+        }
+        // Identity fast-path: plain text has nothing to convert or neutralize.
+        // Raw newlines/tabs disqualify so every output honors the one-paragraph-
+        // per-line invariant the slow path establishes.
+        if (html.indexOf('<') < 0 && html.indexOf('&') < 0
+                && html.indexOf('[') < 0 && html.indexOf(']') < 0
+                && html.indexOf('\n') < 0 && html.indexOf('\r') < 0 && html.indexOf('\t') < 0) {
+            String trimmed = html.trim();
+            return trimmed.isEmpty() ? List.of() : List.of(trimmed);
+        }
+        // NUL is the placeholder alphabet below; partner text must not supply it.
+        String s = html.replace("\u0000", "");
+        s = DROP_WITH_CONTENT.matcher(s).replaceAll(" ");
+        // Raw newlines are HTML whitespace; \n is reserved as the break sentinel.
+        s = s.replaceAll("[\\r\\n\\t]+", " ");
+        List<String> links = new ArrayList<>();
+        Matcher anchor = ANCHOR.matcher(s);
+        StringBuilder rewritten = new StringBuilder();
+        while (anchor.find()) {
+            String href = anchor.group("dq") != null ? anchor.group("dq")
+                    : anchor.group("sq") != null ? anchor.group("sq") : anchor.group("uq");
+            links.add(markdownLink(href, cleanLinkText(anchor.group("text"))));
+            anchor.appendReplacement(rewritten,
+                    Matcher.quoteReplacement("\u0000L" + (links.size() - 1) + "\u0000"));
+        }
+        anchor.appendTail(rewritten);
+        s = rewritten.toString();
+        s = BREAK_TAGS.matcher(s).replaceAll("\n");
+        s = BOLD_OPEN.matcher(s).replaceAll("\u0000B\u0000");
+        s = BOLD_CLOSE.matcher(s).replaceAll("\u0000/B\u0000");
+        s = OTHER_TAGS.matcher(s).replaceAll(" ");
+        s = decodeEntities(s);
+        s = neutralizeBrackets(s);
+        // Whitespace hugging a bold delimiter (e.g. <strong>x:&nbsp;&nbsp;</strong>)
+        // moves outside the pair: a strict markdown parser will not close ** across a
+        // space. An emptied pair is dropped rather than emitting a bare "****".
+        s = s.replaceAll("\u0000B\u0000(\\s+)", "$1\u0000B\u0000")
+                .replaceAll("(\\s+)\u0000/B\u0000", "\u0000/B\u0000$1")
+                .replace("\u0000B\u0000\u0000/B\u0000", "")
+                .replace("\u0000B\u0000", "**").replace("\u0000/B\u0000", "**");
+        for (int i = 0; i < links.size(); i++) {
+            s = s.replace("\u0000L" + i + "\u0000", links.get(i));
+        }
+        List<String> paragraphs = new ArrayList<>();
+        for (String part : s.split("\n+")) {
+            String paragraph = part.replaceAll("[ \\t]{2,}", " ").trim();
+            if (!paragraph.isEmpty()) {
+                paragraphs.add(paragraph);
+            }
+        }
+        if (paragraphs.size() > MAX_NOTE_PARAGRAPHS) {
+            int dropped = paragraphs.size() - MAX_NOTE_PARAGRAPHS;
+            paragraphs = new ArrayList<>(paragraphs.subList(0, MAX_NOTE_PARAGRAPHS));
+            paragraphs.add("(note truncated; " + dropped
+                    + " more paragraph(s) in the TSANet web app)");
+        }
+        return paragraphs;
+    }
+
+    private static String markdownLink(String href, String text) {
+        // Decode before the scheme check so &amp; in query strings survives and an
+        // entity-obfuscated scheme fails closed against the allowlist.
+        String url = decodeEntities(href == null ? "" : href).trim();
+        String scheme = url.toLowerCase(Locale.ROOT);
+        boolean allowed = scheme.startsWith("http://") || scheme.startsWith("https://")
+                || scheme.startsWith("mailto:");
+        if (!allowed) {
+            // Partner-authored non-web scheme (javascript:, data:, ...): keep the
+            // words, drop the target.
+            return text;
+        }
+        if (text.isEmpty()) {
+            text = neutralizeBrackets(url);
+        }
+        // These four break markdown link parsing mid-URL; any whitespace ends it —
+        // including a newline minted by an entity like &#10;, so encode all of \s.
+        url = url.replace("(", "%28").replace(")", "%29")
+                .replace("[", "%5B").replace("]", "%5D").replaceAll("\\s", "%20");
+        return "[" + text + "](" + url + ")";
+    }
+
+    private static String cleanLinkText(String inner) {
+        String text = OTHER_TAGS.matcher(inner).replaceAll(" ");
+        text = neutralizeBrackets(decodeEntities(text));
+        return text.replaceAll("\\s{2,}", " ").trim();
+    }
+
+    private static String decodeEntities(String s) {
+        Matcher numeric = NUMERIC_ENTITY.matcher(s);
+        StringBuilder out = new StringBuilder();
+        while (numeric.find()) {
+            String digits = numeric.group(1);
+            String replacement = "";
+            try {
+                int codePoint = digits.startsWith("x") || digits.startsWith("X")
+                        ? Integer.parseInt(digits.substring(1), 16)
+                        : Integer.parseInt(digits);
+                // NUL stays excluded (placeholder alphabet), and so does the surrogate
+                // range: isValidCodePoint(0xD800) is true but toChars would emit a lone
+                // surrogate — ill-formed UTF-16 that can break the canvas JSON downstream.
+                if (Character.isValidCodePoint(codePoint) && codePoint != 0
+                        && !(codePoint >= 0xD800 && codePoint <= 0xDFFF)) {
+                    replacement = new String(Character.toChars(codePoint));
+                }
+            } catch (NumberFormatException ignored) {
+                // malformed entity: drop it
+            }
+            numeric.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        numeric.appendTail(out);
+        // &amp; strictly last, one pass: &amp;lt; must yield "&lt;", never "<".
+        return out.toString()
+                .replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&quot;", "\"").replace("&apos;", "'")
+                .replace("&amp;", "&");
+    }
+
+    /** Same defense as the SDK gateway's problem+json detail cleanup: literal
+     * bracket syntax in untrusted text must not become a live markdown link. */
+    private static String neutralizeBrackets(String s) {
+        return s.replace("[", "(").replace("]", ")");
     }
 
     private Map<String, Object> doSubmit(OutboundFlowState state, Map<String, Object> payload,
