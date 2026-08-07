@@ -32,6 +32,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -433,14 +434,37 @@ class SdkTsanetGatewayTest {
         // An interrupted wait proves nothing about the create request already on the
         // wire; mapping it to plain GatewayException would re-arm DRAFT and invite a
         // duplicate submit (advisor catch on the pre-PR review).
+        //
+        // The worker is HELD until the assertion has run, because a pending interrupt
+        // is only observable while the task is still in flight: Future.get() on an
+        // ALREADY COMPLETE task returns the value and never checks the flag (probed
+        // directly - an interrupted caller with a completed task returns normally,
+        // flag still set). Without the latch this raced the virtual thread and passed
+        // or failed on scheduling: green on macOS, red under CI load, which is how it
+        // reached main on the day the sdk job first actually ran.
+        CountDownLatch releaseCreate = new CountDownLatch(1);
         forms.onFetch = () -> formWithField(88);
-        collaborations.onCreate = form -> status("case-int", "TSA-INT", true);
+        collaborations.onCreate = form -> {
+            try {
+                releaseCreate.await();
+            } catch (InterruptedException e) {
+                // bounded()'s future.cancel(true) lands here; keep the flag honest.
+                Thread.currentThread().interrupt();
+            }
+            return status("case-int", "TSA-INT", true);
+        };
         SdkTsanetGateway gateway = gateway(1500, 4000);
         Thread.currentThread().interrupt();
         try {
-            assertThrows(GatewayTimeoutException.class,
+            GatewayTimeoutException thrown = assertThrows(GatewayTimeoutException.class,
                     () -> gateway.submit(draft("case-int", Map.of("88", "SN"))));
+            // Both the interrupt path and the 4s deadline throw this same type, so
+            // assert the REASON, not just the class: a held worker would otherwise let
+            // this pass by timing out, proving nothing about interrupt handling.
+            assertTrue(thrown.getMessage().contains("interrupted"),
+                    "must be the interrupt path, not the deadline path: " + thrown.getMessage());
         } finally {
+            releaseCreate.countDown();
             assertTrue(Thread.interrupted(), "the interrupt flag must be restored, then cleared for the suite");
         }
     }
