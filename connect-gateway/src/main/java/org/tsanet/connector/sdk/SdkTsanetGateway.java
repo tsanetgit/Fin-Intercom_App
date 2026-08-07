@@ -14,10 +14,13 @@ import com.tsanet.api.generated.model.CaseInformationRequestDTO;
 import com.tsanet.api.generated.model.CaseRejectionDTO;
 import com.tsanet.api.generated.model.CollaborationRequestDTO;
 import com.tsanet.api.generated.model.CollaborationRequestStatusDTO;
+import com.tsanet.api.generated.model.CollaborationRequestType;
 import com.tsanet.api.generated.model.ContactDetailsDTO;
 import com.tsanet.api.generated.model.FieldMetadataDTO;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -108,7 +111,13 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
 
     /** Wall-clock budgets and the test-submission flag; see docs/decisions.md D2/D9. */
     public record Config(String apiBaseUrl, boolean testSubmission, long readDeadlineMillis,
-            long submitDeadlineMillis) {
+            long submitDeadlineMillis, long reconcileDeadlineMillis) {
+
+        /** Canvas-shaped construction: the reconcile budget is not a canvas concern. */
+        public Config(String apiBaseUrl, boolean testSubmission, long readDeadlineMillis,
+                long submitDeadlineMillis) {
+            this(apiBaseUrl, testSubmission, readDeadlineMillis, submitDeadlineMillis, 0);
+        }
 
         public Config {
             if (apiBaseUrl == null || apiBaseUrl.isBlank()) {
@@ -119,6 +128,15 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
             }
             if (submitDeadlineMillis <= 0) {
                 submitDeadlineMillis = 4000;
+            }
+            if (reconcileDeadlineMillis <= 0) {
+                // Deliberately an order of magnitude above the canvas read budget. That
+                // 1500ms exists because an agent is watching a spinner; nobody is
+                // watching this, the response is UNPAGINATED, and a first run after an
+                // outage can ask for a wide window. Failing it early would abandon the
+                // cycle that matters most, and the cursor does not advance on failure —
+                // so a too-tight deadline here does not lose cases, it wedges recovery.
+                reconcileDeadlineMillis = 30_000;
             }
         }
     }
@@ -464,7 +482,16 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
             log.warn("tsanet_gateway_tokenless_row op=fetch");
             throw new GatewayException("Connect returned the case without a token (fetch)");
         }
-        return Optional.of(new InboundCase(
+        return Optional.of(toInboundCase(dto));
+    }
+
+    /**
+     * One DTO -> InboundCase conversion, shared by fetch and list. Two copies would be
+     * two places to get the testCase/testSubmission asymmetry wrong, and reading the
+     * wrong one treats a test case as real.
+     */
+    private static InboundCase toInboundCase(CollaborationRequestStatusDTO dto) {
+        return new InboundCase(
                 dto.getToken(),
                 direction(dto.getDirection()),
                 status(dto.getStatus()),
@@ -477,7 +504,35 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
                 dto.getPriority() == null ? null : dto.getPriority().toString(),
                 // testCase read, testSubmission written: the fields are deliberately
                 // asymmetric and reading the wrong one treats a test case as real.
-                Boolean.TRUE.equals(dto.getTestCase())));
+                Boolean.TRUE.equals(dto.getTestCase()));
+    }
+
+    @Override
+    public List<InboundCase> listInboundUpdatedSince(Instant updatedAfter) {
+        // type=INBOUND is applied SERVER-side and the caller checks direction again.
+        // Belt and braces deliberately: this is the one read whose rows become tickets,
+        // so an ignored filter parameter would turn every case WE submitted into an
+        // inbound ticket for our own work. findSubmission takes the same stance.
+        OffsetDateTime cursor = updatedAfter == null ? null : updatedAfter.atOffset(ZoneOffset.UTC);
+        List<CollaborationRequestStatusDTO> body = bounded("reconcile",
+                config.reconcileDeadlineMillis(),
+                () -> collaborations.listCollaborationRequests(
+                        null, CollaborationRequestType.INBOUND, null, cursor, null, Boolean.FALSE));
+        if (body == null) {
+            return List.of();
+        }
+        List<InboundCase> cases = new ArrayList<>(body.size());
+        for (CollaborationRequestStatusDTO dto : body) {
+            if (dto.getToken() == null || dto.getToken().isBlank()) {
+                // Skipped rather than fatal: one unkeyable row must not blind the cycle
+                // to every other case in the window. Logged because a token is the only
+                // handle an inbound case has, so this is a case we can never route.
+                log.warn("tsanet_gateway_tokenless_row op=reconcile");
+                continue;
+            }
+            cases.add(toInboundCase(dto));
+        }
+        return List.copyOf(cases);
     }
 
     /** Unrecognised wire values map to UNKNOWN rather than a guess: direction decides

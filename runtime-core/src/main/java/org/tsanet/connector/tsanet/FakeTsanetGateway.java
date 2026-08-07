@@ -154,6 +154,55 @@ public class FakeTsanetGateway implements TsanetGateway {
         return Optional.empty();
     }
 
+    /**
+     * Inbound cases the poller should discover. Empty by default, so the poller is a
+     * no-op in ordinary development rather than inventing partner traffic.
+     */
+    private final List<InboundCase> inboundFeed = new CopyOnWriteArrayList<>();
+    private final Map<String, Instant> inboundUpdatedAt = new ConcurrentHashMap<>();
+    private volatile RuntimeException listFailure;
+
+    /** Adds a case the poller will see, stamped with the updatedAt it reports. */
+    public void seedInbound(InboundCase inboundCase, Instant updatedAt) {
+        inboundFeed.add(inboundCase);
+        inboundUpdatedAt.put(inboundCase.token(), updatedAt);
+    }
+
+    /** Makes list calls fail; null clears it. */
+    public void failListWith(RuntimeException failure) {
+        this.listFailure = failure;
+    }
+
+    /** The updatedAt this fake reports for a seeded case, for cursor assertions. */
+    public Instant updatedAtOf(String token) {
+        return inboundUpdatedAt.get(token);
+    }
+
+    @Override
+    public List<InboundCase> listInboundUpdatedSince(Instant updatedAfter) {
+        RuntimeException injected = listFailure;
+        if (injected != null) {
+            throw injected;
+        }
+        return inboundFeed.stream()
+                // Direction is filtered server-side by the real gateway; mirroring that
+                // here keeps a seeded OUTBOUND case out of the feed exactly as the API
+                // would, so a caller's own direction check is not the only thing
+                // standing between an outbound case and a duplicate ticket.
+                .filter(InboundCase::inbound)
+                // A null cursor means "everything" — that is what a first run with no
+                // stored cursor asks for, and the real API treats an absent filter the
+                // same way. Refusing it here would hide that path from every test.
+                .filter(c -> {
+                    if (updatedAfter == null) {
+                        return true;
+                    }
+                    Instant at = inboundUpdatedAt.get(c.token());
+                    return at == null || !at.isBefore(updatedAfter);
+                })
+                .toList();
+    }
+
     /** What the fake was last asked to send, so flows can assert the payload. */
     public record Responded(String token, String action, EngineerIdentity engineer,
             String caseNumber, String text) {

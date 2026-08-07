@@ -1,5 +1,6 @@
 package org.tsanet.connector.tsanet;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.tsanet.connector.tsanet.dto.EngineerIdentity;
@@ -71,6 +72,34 @@ public interface TsanetGateway {
      * such case", because a handler would then treat a live partner case as absent.
      */
     Optional<InboundCase> fetchByToken(String token);
+
+    /**
+     * Every INBOUND case whose {@code updatedAt} is at or after {@code updatedAfter}.
+     *
+     * <p>The reconciliation poller's only read, and the thing that turns a lost push
+     * event into a LATE case instead of a lost one: intake answers 200 on every branch
+     * so TSANet never redelivers, which makes push a single attempt from our side.
+     *
+     * <p>Rows are FULL cases — everything {@link #fetchByToken} would return — so a
+     * caller acts without a per-token read.
+     *
+     * <p><b>Cursoring on {@code updatedAt} is safe for create-recovery, which was
+     * verified rather than assumed.</b> On BETA a freshly created case comes back with
+     * {@code updatedAt} exactly equal to {@code createdAt}, and a filter set just before
+     * it returns that case (probe, 2026-08-07). Had creation left {@code updatedAt}
+     * unset until first modification, this cursor would have missed precisely the new
+     * cases the poller exists to catch — for 24h, until the server's SLA sweep touched
+     * them. If that behaviour ever changes, this contract is what breaks.
+     *
+     * <p>Callers pass a cursor with OVERLAP already subtracted. The field mixes
+     * granularity (creation writes sub-second, the SLA sweep writes whole seconds) and
+     * the filter's inclusive/exclusive boundary is unspecified. Re-listing a case is
+     * free — the caller skips anything already linked — while missing one is not.
+     *
+     * <p>Idempotent. Bounded by its own deadline rather than the canvas read budget: no
+     * agent is waiting on it, and the response is unpaginated.
+     */
+    List<InboundCase> listInboundUpdatedSince(Instant updatedAfter);
 
     /**
      * Accepts a partner's case. {@code caseNumber} is OUR reference, which the partner

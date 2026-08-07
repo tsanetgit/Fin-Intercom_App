@@ -6,10 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.tsanet.connector.tsanet.dto.InboundCase;
 import org.tsanet.connector.tsanet.dto.PartnerHit;
@@ -114,6 +117,49 @@ public abstract class TsanetGatewayContractTest {
         // implementation that cannot determine it must say UNKNOWN rather than guess.
         assertNotNull(found.direction());
         assertTrue(found.inbound(), "the fixture token must be a partner-originated case");
+    }
+
+    @Test
+    void inboundListReturnsOnlyRoutableInboundCases() {
+        // This is the one read whose rows become tickets. An implementation that lets
+        // an OUTBOUND case through — because it dropped the type filter, or because the
+        // server ignored it — creates an inbound ticket for work WE submitted, and
+        // invites an agent to answer their own case. Asserted on the contract rather
+        // than in one implementation's test, because the two reach the guarantee by
+        // different means: the SDK gateway filters server-side, the fake in memory.
+        List<InboundCase> cases = gateway().listInboundUpdatedSince(null);
+        assertNotNull(cases, "the list is never null; empty is the no-work answer");
+        cases.forEach(c -> {
+            assertTrue(c.inbound(), "listInboundUpdatedSince returned a non-INBOUND case: "
+                    + c.token() + " direction=" + c.direction());
+            assertNotNull(c.token(), "a case with no token cannot be routed and must not be returned");
+            assertFalse(c.token().isBlank(), "a blank token is as unroutable as a null one");
+        });
+    }
+
+    @Test
+    void inboundListHonoursTheCursor() {
+        // The property the poller's whole design rests on: if the filter were ignored,
+        // every cycle would re-offer every case that ever existed and the cursor would
+        // be decorative.
+        //
+        // THE ASSUMPTION IS LOAD-BEARING, not defensive. Asserting "a 10-year-future
+        // cursor returns nothing" is trivially satisfied by an implementation with no
+        // inbound cases at all — which is the fake's default state, so the first
+        // version of this test passed while the fake ignored its cursor entirely
+        // (probed). An environment with nothing to filter cannot measure filtering, and
+        // a test that cannot measure must SKIP visibly rather than report a pass.
+        //
+        // The non-vacuous version lives in FakeTsanetGatewayContractTest, which seeds
+        // two cases either side of a cursor.
+        List<InboundCase> all = gateway().listInboundUpdatedSince(null);
+        Assumptions.assumeFalse(all.isEmpty(),
+                "no inbound cases in this environment — cursor filtering is unmeasurable here");
+        List<InboundCase> future =
+                gateway().listInboundUpdatedSince(Instant.now().plus(Duration.ofDays(3650)));
+        assertTrue(future.isEmpty(), "a cursor 10 years ahead must match nothing, but "
+                + future.size() + " of " + all.size() + " came back — the updatedAfter"
+                + " filter is being ignored");
     }
 
     @Test
