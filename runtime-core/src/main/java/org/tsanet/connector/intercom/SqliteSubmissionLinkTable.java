@@ -119,7 +119,7 @@ public class SqliteSubmissionLinkTable implements SubmissionLinkTable {
     }
 
     @Override
-    public void record(SubmissionLink link) {
+    public boolean record(SubmissionLink link) {
         // One row, two indexes maintained by SQLite: unlike three hand-kept maps, a
         // partially-recorded link is not representable.
         String sql = "INSERT INTO submission_link (" + COLUMNS + ", annotation_state)"
@@ -137,7 +137,9 @@ public class SqliteSubmissionLinkTable implements SubmissionLinkTable {
             ps.setString(9, link.submittedBy());
             ps.setString(10, link.submittedAt() == null ? null : link.submittedAt().toString());
             ps.setString(11, AnnotationState.NONE.name());
-            ps.executeUpdate();
+            // 0 rows means ON CONFLICT(token) suppressed the insert: this caller lost
+            // the claim. 1 means it won and owns the platform write that follows.
+            return ps.executeUpdate() == 1;
         } catch (SQLException e) {
             throw new IllegalStateException("cannot record a submission link", e);
         }

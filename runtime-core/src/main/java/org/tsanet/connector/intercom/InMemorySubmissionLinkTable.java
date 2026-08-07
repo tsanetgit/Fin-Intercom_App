@@ -30,7 +30,7 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
     private final Map<String, CopyOnWriteArrayList<String>> tokensByConversation = new ConcurrentHashMap<>();
 
     @Override
-    public void record(SubmissionLink link) {
+    public boolean record(SubmissionLink link) {
         // Both routing keys validated BEFORE the first map mutation, and as one check:
         // caught at tokenByInternal instead, a null internal case number would leave the
         // link in byToken and out of the internal-case index — the partially-recorded
@@ -45,7 +45,7 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
         Entry previous = byToken.putIfAbsent(link.token(),
                 new Entry(link, new AtomicReference<>(AnnotationState.NONE)));
         if (previous != null) {
-            return; // replay: first record wins, indexes already point here
+            return false; // replay: first record wins, indexes already point here
         }
         tokenByInternal.putIfAbsent(link.internalCaseNumber(), link.token());
         if (link.conversationId() != null) {
@@ -57,6 +57,7 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
             log.warn("submission link table at {} entries (in-memory, never evicts;"
                     + " persistence is the Phase-2 precondition)", size);
         }
+        return true;
     }
 
     // Why every keyed entry point below tolerates a null key: the keys arrive from

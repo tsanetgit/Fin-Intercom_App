@@ -28,7 +28,18 @@ public interface SubmissionLinkTable {
      * @throws IllegalStateException if the token or the internal case number is null.
      *     Rejection is atomic: nothing is left behind on any index.
      */
-    void record(SubmissionLink link);
+    /**
+     * Records a link, first-write-wins on the token.
+     *
+     * @return true when THIS call inserted the row, false when the token was already
+     *     present. The return value is the only atomic claim primitive the table
+     *     offers: an inbound handler that checks byToken and then creates has a
+     *     TOCTOU race where two concurrent deliveries both find nothing and both
+     *     create a ticket. Claiming with this instead makes the token's unique
+     *     constraint the arbiter, so exactly one caller proceeds to the platform
+     *     write. Callers that do not race may ignore it.
+     */
+    boolean record(SubmissionLink link);
 
     Optional<SubmissionLink> byToken(String token);
 

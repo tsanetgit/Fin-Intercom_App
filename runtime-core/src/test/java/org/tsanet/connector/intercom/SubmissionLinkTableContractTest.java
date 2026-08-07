@@ -1,6 +1,7 @@
 package org.tsanet.connector.intercom;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -105,6 +106,21 @@ public abstract class SubmissionLinkTableContractTest {
         table().annotationState("never-recorded", AnnotationState.FULL);
         assertEquals(AnnotationState.NONE, table().annotationState("never-recorded"));
         assertEquals(0, table().size(), "a state write must not conjure a link");
+    }
+
+    @Test
+    void recordReportsWhoWonTheClaim() {
+        // Both stores are first-write-wins, but a caller that cannot SEE which write
+        // won has to check-then-create, and two concurrent deliveries of the same
+        // inbound event then both find nothing and both create a platform object.
+        // The token's uniqueness is the arbiter; this return value is how a handler
+        // reads the verdict.
+        assertTrue(table().record(link("TSA-claim", "flow-claim", "conv-claim")),
+                "the first write inserts and must say so");
+        assertFalse(table().record(link("TSA-claim", "flow-other", "conv-other")),
+                "a second write on the same token must report that it did NOT insert");
+        assertEquals("flow-claim", table().byToken("TSA-claim").orElseThrow().internalCaseNumber(),
+                "and the first write must still be the one stored");
     }
 
     @Test
