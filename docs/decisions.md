@@ -502,3 +502,47 @@ Consequences, each deliberate:
 
 Only `collaboration-request.created` is claimed. The other four push types belong to
 later slices and are deliberately left unclaimed, which the drain logs.
+
+## D15. Answering a partner: state first, then the API, and ambiguity means ambiguity
+
+The three response actions (Accept / Decline / Request information) are agent-driven
+writes the PARTNER sees, so they inherit every rule submit has.
+
+**The panel renders from recorded state, not from what was clicked.** The link carries
+a `CaseState`, and a response moves it by compare-and-set BEFORE calling the API. Two
+panels open on one ticket cannot both answer: the loser sees the guard fail and
+re-renders what actually holds. Answered cases offer no buttons.
+
+**Failure handling follows the state, not the other way round.** A definitive
+rejection gives the state back (the agent fixes and retries); an ambiguous outcome
+keeps the state moved and says the result is unknown, because re-offering the action
+is precisely what would answer a partner twice.
+
+**A 5xx on a response action is ambiguous — and was not.** The gateway's ambiguity
+rule was gated on `op.equals("submit")`, so a 500 on approve surfaced as a plain
+`GatewayException`, which the panel reads as definitively rejected: state given back,
+agent invited to answer a partner who may already have been answered. Caught by the
+response-action probe, not by review. The gate is now a `MUTATING_OPS` set covering
+every operation the partner can see. **Any future partner-visible write must be added
+to that set**, and the reason it is a set rather than a boolean on the call site is so
+that omission is visible in one place.
+
+**The engineer identity is prefilled and editable.** The API rejects an address off
+the member's registered domain, no status code conveys that, and the connector cannot
+know the registered domains — the validated problem+json `detail` is the only source.
+So the acting teammate is a default, not a lock, and the rejection renders beside the
+email field with the typed values preserved: one correction and a resubmit.
+
+**`caseNumber` is the ticket number, not the ticket id.** Probed live: an Intercom
+ticket carries `id` (`215475361003303`, the API handle) and `ticket_id`
+(`121556608`, the `#`-number an agent sees and can search). The partner quotes our
+case number back, so it must be the searchable one. Whatever we send is then RECORDED
+on the link rather than re-derived, so the value survives a change of convention.
+
+**One ticket can anchor several cases**, so `byTicketId` refuses a multiple match
+instead of picking. An agent may escalate one customer problem to two partners; a
+unique index on `ticket_id` looked correct and would have made that impossible — the
+existing contract tests caught it.
+
+Out of scope and deliberately unclaimed: `information-response` (the reply leg, lands
+with notes), notes both directions, closure, and lifecycle sync.

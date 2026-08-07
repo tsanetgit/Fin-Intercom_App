@@ -3,11 +3,15 @@ package org.tsanet.connector.sdk;
 import com.tsanet.api.TsaNetApiSession;
 import com.tsanet.api.connectapi.PartnerSearchValidation;
 import com.tsanet.api.facade.AuthFacade;
+import com.tsanet.api.generated.api.CaseResponsesApi;
 import com.tsanet.api.generated.api.CollaborationRequestsApi;
 import com.tsanet.api.generated.api.EntitySearchApi;
 import com.tsanet.api.generated.api.FormRequestApi;
 import com.tsanet.api.generated.invoker.ApiClient;
 import com.tsanet.api.generated.model.CasePriority;
+import com.tsanet.api.generated.model.CaseApprovalDTO;
+import com.tsanet.api.generated.model.CaseInformationRequestDTO;
+import com.tsanet.api.generated.model.CaseRejectionDTO;
 import com.tsanet.api.generated.model.CollaborationRequestDTO;
 import com.tsanet.api.generated.model.CollaborationRequestStatusDTO;
 import com.tsanet.api.generated.model.ContactDetailsDTO;
@@ -41,6 +45,7 @@ import org.tsanet.connector.tsanet.GatewayException;
 import org.tsanet.connector.tsanet.GatewayTimeoutException;
 import org.tsanet.connector.tsanet.TsanetGateway;
 import org.tsanet.connector.tsanet.dto.FormField;
+import org.tsanet.connector.tsanet.dto.EngineerIdentity;
 import org.tsanet.connector.tsanet.dto.InboundCase;
 import org.tsanet.connector.tsanet.dto.PartnerHit;
 import org.tsanet.connector.tsanet.dto.ProcessForm;
@@ -76,8 +81,20 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(SdkTsanetGateway.class);
 
     private static final Duration TOKEN_EXPIRY_SKEW = Duration.ofSeconds(30);
-    /** Definitive pre-create rejections; everything else on submit is ambiguous. */
+    /** Definitive pre-effect rejections; everything else on a MUTATING op is ambiguous. */
     private static final Set<Integer> REJECTED_BEFORE_CREATE = Set.of(400, 401, 403, 404, 422);
+    /**
+     * Operations that change something the PARTNER can see, so an unclear outcome must
+     * surface as ambiguous rather than as a rejection.
+     *
+     * <p>This was "submit" alone, which was a real defect the response-action probe
+     * caught: a 500 on approve came back as a plain GatewayException, the panel read
+     * that as definitively rejected, gave the case state back, and invited the agent to
+     * answer a partner who may already have been answered. Mapping ambiguity to
+     * rejection is the single most consequential error available here, and it does not
+     * stop being one because the mutation is a response instead of a create.
+     */
+    private static final Set<String> MUTATING_OPS = Set.of("submit", "approve", "reject", "information");
     private static final com.fasterxml.jackson.databind.ObjectMapper PROBLEM_MAPPER =
             new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -102,16 +119,19 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
     private final EntitySearchApi entitySearch;
     private final FormRequestApi forms;
     private final CollaborationRequestsApi collaborations;
+    private final CaseResponsesApi caseResponses;
     private final Config config;
     private final GatewayTimeouts timeouts;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     SdkTsanetGateway(TsaNetApiSession session, EntitySearchApi entitySearch, FormRequestApi forms,
-            CollaborationRequestsApi collaborations, Config config, GatewayTimeouts timeouts) {
+            CollaborationRequestsApi collaborations, CaseResponsesApi caseResponses,
+            Config config, GatewayTimeouts timeouts) {
         this.session = session;
         this.entitySearch = entitySearch;
         this.forms = forms;
         this.collaborations = collaborations;
+        this.caseResponses = caseResponses;
         this.config = config;
         this.timeouts = timeouts;
     }
@@ -136,6 +156,7 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
                 new EntitySearchApi(apiClient),
                 new FormRequestApi(apiClient),
                 new CollaborationRequestsApi(apiClient),
+                new CaseResponsesApi(apiClient),
                 config,
                 new GatewayTimeouts());
     }
@@ -477,6 +498,43 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         }
     }
 
+    @Override
+    public void approve(String token, EngineerIdentity engineer, String caseNumber, String nextSteps) {
+        CaseApprovalDTO body = new CaseApprovalDTO();
+        body.setCaseNumber(caseNumber);
+        body.setEngineerName(engineer.name());
+        body.setEngineerEmail(engineer.email());
+        body.setEngineerPhone(engineer.phone());
+        body.setNextSteps(nextSteps);
+        // The submit deadline, not the read one: these are writes the partner sees, and
+        // an ambiguous outcome must surface as GatewayTimeoutException so the panel
+        // re-reads state rather than offering the action again.
+        bounded("approve", config.submitDeadlineMillis(),
+                () -> caseResponses.approveCollaborationRequest(token, body));
+    }
+
+    @Override
+    public void reject(String token, EngineerIdentity engineer, String reason) {
+        CaseRejectionDTO body = new CaseRejectionDTO();
+        body.setEngineerName(engineer.name());
+        body.setEngineerEmail(engineer.email());
+        body.setEngineerPhone(engineer.phone());
+        body.setReason(reason);
+        bounded("reject", config.submitDeadlineMillis(),
+                () -> caseResponses.rejectCollaborationRequest(token, body));
+    }
+
+    @Override
+    public void requestInformation(String token, EngineerIdentity engineer, String requestedInformation) {
+        CaseInformationRequestDTO body = new CaseInformationRequestDTO();
+        body.setEngineerName(engineer.name());
+        body.setEngineerEmail(engineer.email());
+        body.setEngineerPhone(engineer.phone());
+        body.setRequestedInformation(requestedInformation);
+        bounded("information", config.submitDeadlineMillis(),
+                () -> caseResponses.submitInformationRequest(token, body));
+    }
+
     private <T> T bounded(String op, long deadlineMillis, Callable<T> call) {
         Future<T> future = executor.submit(() -> callOnce(call));
         try {
@@ -523,7 +581,7 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
      * untouched: theirs are constructed-safe (SDK validation strings included).
      */
     private GatewayException sanitize(String op, Throwable cause) {
-        boolean submit = "submit".equals(op);
+        boolean submit = MUTATING_OPS.contains(op);
         if (cause instanceof GatewayException gateway) {
             return gateway;
         }

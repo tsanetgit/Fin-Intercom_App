@@ -189,6 +189,38 @@ class SdkTsanetGatewayTest {
         }
     }
 
+    /** Records what the three response actions sent, and can inject their failures. */
+    static final class StubCaseResponses extends com.tsanet.api.generated.api.CaseResponsesApi {
+        final AtomicReference<Object> lastBody = new AtomicReference<>();
+        volatile RuntimeException failWith;
+
+        @Override
+        public CollaborationRequestStatusDTO approveCollaborationRequest(String token,
+                com.tsanet.api.generated.model.CaseApprovalDTO body) {
+            return record(body);
+        }
+
+        @Override
+        public CollaborationRequestStatusDTO rejectCollaborationRequest(String token,
+                com.tsanet.api.generated.model.CaseRejectionDTO body) {
+            return record(body);
+        }
+
+        @Override
+        public CollaborationRequestStatusDTO submitInformationRequest(String token,
+                com.tsanet.api.generated.model.CaseInformationRequestDTO body) {
+            return record(body);
+        }
+
+        private CollaborationRequestStatusDTO record(Object body) {
+            lastBody.set(body);
+            if (failWith != null) {
+                throw failWith;
+            }
+            return new CollaborationRequestStatusDTO();
+        }
+    }
+
     static final class StubCollaborations extends CollaborationRequestsApi {
         Supplier<List<CollaborationRequestStatusDTO>> onList = List::of;
         java.util.function.Function<CollaborationRequestDTO, CollaborationRequestStatusDTO> onCreate =
@@ -213,9 +245,10 @@ class SdkTsanetGatewayTest {
     private final StubSearch search = new StubSearch();
     private final StubForms forms = new StubForms();
     private final StubCollaborations collaborations = new StubCollaborations();
+    private final StubCaseResponses caseResponses = new StubCaseResponses();
 
     private SdkTsanetGateway gateway(long readMs, long submitMs) {
-        return new SdkTsanetGateway(session(auth), search, forms, collaborations,
+        return new SdkTsanetGateway(session(auth), search, forms, collaborations, caseResponses,
                 new SdkTsanetGateway.Config("https://stub.invalid", true, readMs, submitMs),
                 new GatewayTimeouts());
     }
@@ -467,6 +500,46 @@ class SdkTsanetGatewayTest {
             releaseCreate.countDown();
             assertTrue(Thread.interrupted(), "the interrupt flag must be restored, then cleared for the suite");
         }
+    }
+
+    @Test
+    void responseActionsSendEveryRequiredFieldAndKeepTheFailureTaxonomy() {
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        org.tsanet.connector.tsanet.dto.EngineerIdentity engineer =
+                new org.tsanet.connector.tsanet.dto.EngineerIdentity(
+                        "Dana Agent", "dana@member.example", "+1 555 0100");
+
+        gateway.approve("tok-a", engineer, "121556608", "engineer assigned");
+        com.tsanet.api.generated.model.CaseApprovalDTO approval =
+                (com.tsanet.api.generated.model.CaseApprovalDTO) caseResponses.lastBody.get();
+        // caseNumber is the agent-searchable ticket number, not the API id: the partner
+        // quotes this back and it has to be findable in the Help Desk.
+        assertEquals("121556608", approval.getCaseNumber());
+        assertEquals("Dana Agent", approval.getEngineerName());
+        assertEquals("dana@member.example", approval.getEngineerEmail());
+        assertEquals("engineer assigned", approval.getNextSteps());
+
+        gateway.reject("tok-r", engineer, "not our product");
+        assertEquals("not our product",
+                ((com.tsanet.api.generated.model.CaseRejectionDTO) caseResponses.lastBody.get()).getReason());
+
+        gateway.requestInformation("tok-i", engineer, "which array?");
+        assertEquals("which array?", ((com.tsanet.api.generated.model.CaseInformationRequestDTO)
+                caseResponses.lastBody.get()).getRequestedInformation());
+
+        // A 422 is definitive - it is where the email-domain rule lands - and must NOT
+        // read as ambiguous, or the panel would refuse to let the agent correct it.
+        caseResponses.failWith = HttpClientErrorException.create(HttpStatus.UNPROCESSABLE_ENTITY,
+                "unprocessable", HttpHeaders.EMPTY, new byte[0], null);
+        GatewayException definitive = assertThrows(GatewayException.class,
+                () -> gateway.approve("tok-a", engineer, "1", "x"));
+        assertFalse(definitive instanceof GatewayTimeoutException);
+
+        // A 500 after the request was sent is ambiguous: the partner may already have it.
+        caseResponses.failWith = HttpServerErrorException.create(HttpStatus.INTERNAL_SERVER_ERROR,
+                "boom", HttpHeaders.EMPTY, new byte[0], null);
+        assertThrows(GatewayTimeoutException.class, () -> gateway.approve("tok-a", engineer, "1", "x"));
+        caseResponses.failWith = null;
     }
 
     // ---- 401 recovery ----

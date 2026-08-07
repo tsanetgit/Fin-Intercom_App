@@ -8,10 +8,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import org.tsanet.connector.tsanet.dto.FormField;
+import org.tsanet.connector.tsanet.dto.EngineerIdentity;
 import org.tsanet.connector.tsanet.dto.InboundCase;
 import org.tsanet.connector.tsanet.dto.PartnerHit;
 import org.tsanet.connector.tsanet.dto.ProcessForm;
@@ -150,6 +152,49 @@ public class FakeTsanetGateway implements TsanetGateway {
                     "2026-08-08T12:00:00Z", "MEDIUM", true));
         }
         return Optional.empty();
+    }
+
+    /** What the fake was last asked to send, so flows can assert the payload. */
+    public record Responded(String token, String action, EngineerIdentity engineer,
+            String caseNumber, String text) {
+    }
+
+    private final List<Responded> responses = new CopyOnWriteArrayList<>();
+
+    public List<Responded> responses() {
+        return List.copyOf(responses);
+    }
+
+    @Override
+    public void approve(String token, EngineerIdentity engineer, String caseNumber, String nextSteps) {
+        record("approve", token, engineer, caseNumber, nextSteps);
+    }
+
+    @Override
+    public void reject(String token, EngineerIdentity engineer, String reason) {
+        record("reject", token, engineer, null, reason);
+    }
+
+    @Override
+    public void requestInformation(String token, EngineerIdentity engineer, String requestedInformation) {
+        record("information", token, engineer, null, requestedInformation);
+    }
+
+    /**
+     * Injection points that mirror the real failures a response flow must render: an
+     * off-domain engineer address is the email-domain rule (definitive, carries a
+     * problem+json detail), and a token starting {@code timeout} is ambiguous.
+     */
+    private void record(String action, String token, EngineerIdentity engineer,
+            String caseNumber, String text) {
+        if (engineer != null && engineer.email() != null && engineer.email().endsWith("@offdomain.test")) {
+            throw new GatewayException("Connect API rejected the request (HTTP 422, " + action
+                    + "): engineer email must be on the member's registered domain");
+        }
+        if (token != null && token.startsWith("timeout")) {
+            throw new GatewayTimeoutException("Connect API timed out (" + action + ", >4000ms)");
+        }
+        responses.add(new Responded(token, action, engineer, caseNumber, text));
     }
 
     private static final List<PartnerHit> FIXTURE_PARTNERS = buildFixtures();

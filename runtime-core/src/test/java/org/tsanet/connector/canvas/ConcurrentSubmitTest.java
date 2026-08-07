@@ -61,6 +61,23 @@ class ConcurrentSubmitTest {
     /** Gateway whose submit parks until released, making the race window explicit. */
     static final class BlockingGateway implements TsanetGateway {
         @Override
+        public void approve(String token, org.tsanet.connector.tsanet.dto.EngineerIdentity e,
+                String caseNumber, String nextSteps) {
+            throw new UnsupportedOperationException("not exercised by this test's flow");
+        }
+
+        @Override
+        public void reject(String token, org.tsanet.connector.tsanet.dto.EngineerIdentity e, String reason) {
+            throw new UnsupportedOperationException("not exercised by this test's flow");
+        }
+
+        @Override
+        public void requestInformation(String token,
+                org.tsanet.connector.tsanet.dto.EngineerIdentity e, String requested) {
+            throw new UnsupportedOperationException("not exercised by this test's flow");
+        }
+
+        @Override
         public java.util.Optional<org.tsanet.connector.tsanet.dto.InboundCase> fetchByToken(String token) {
             return java.util.Optional.empty(); // not exercised by this test's flow
         }

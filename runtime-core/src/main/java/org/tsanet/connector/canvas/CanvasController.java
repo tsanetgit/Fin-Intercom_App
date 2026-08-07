@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -50,18 +51,22 @@ public class CanvasController {
     private final TsanetGateway gateway;
     private final SubmissionLinkTable links;
     private final EventQueue queue;
+    private final org.tsanet.connector.inbound.InboundPanel inbound;
 
     public CanvasController(FlowStateStore flows, TsanetGateway gateway, SubmissionLinkTable links,
-            EventQueue queue) {
+            EventQueue queue, org.tsanet.connector.inbound.InboundPanel inbound) {
         this.flows = flows;
         this.gateway = gateway;
         this.links = links;
         this.queue = queue;
+        this.inbound = inbound;
     }
 
     @PostMapping("/canvas/initialize")
     public Map<String, Object> initialize(@RequestBody Map<String, Object> payload) {
-        return home(flows.create(), surface(payload), null);
+        // A ticket we created for a partner's case shows that case; everything else
+        // gets the outbound partner search.
+        return inbound.render(payload).orElseGet(() -> home(flows.create(), surface(payload), null));
     }
 
     @PostMapping("/canvas/submit")
@@ -73,6 +78,13 @@ public class CanvasController {
         }
         String component = String.valueOf(payload.getOrDefault("component_id", ""));
         Map<String, String> inputs = inputValues(payload);
+
+        if (org.tsanet.connector.inbound.InboundPanel.owns(component)) {
+            Optional<Map<String, Object>> answered = inbound.submit(payload, component, inputs);
+            if (answered.isPresent()) {
+                return answered.get();
+            }
+        }
 
         if ("back_home".equals(component)) {
             Status status = state.status();
