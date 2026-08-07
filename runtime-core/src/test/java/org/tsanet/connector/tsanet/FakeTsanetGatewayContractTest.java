@@ -15,6 +15,22 @@ class FakeTsanetGatewayContractTest extends TsanetGatewayContractTest {
         return fake;
     }
 
+    @Override
+    protected String knownInboundToken() {
+        return "inbound-contract";
+    }
+
+    @Test
+    void fetchByTokenDistinguishesDirectionAndPropagatesFailures() {
+        // Direction decides whether a push event creates a ticket at all, so the fake
+        // must be able to produce both, and an injected read failure must throw rather
+        // than read as "no such case".
+        assertTrue(fake.fetchByToken("outbound-1").orElseThrow().direction()
+                == org.tsanet.connector.tsanet.dto.InboundCase.Direction.OUTBOUND);
+        assertThrows(GatewayException.class, () -> fake.fetchByToken("failfetch-1"));
+        assertThrows(GatewayTimeoutException.class, () -> fake.fetchByToken("timeoutfetch-1"));
+    }
+
     @Test
     void injectedFailuresAreThrown() {
         assertThrows(GatewayException.class, () -> fake.searchPartners("failsearch anything"));

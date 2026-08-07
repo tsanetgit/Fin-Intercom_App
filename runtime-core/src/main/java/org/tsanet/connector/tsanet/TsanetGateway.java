@@ -2,6 +2,7 @@ package org.tsanet.connector.tsanet;
 
 import java.util.List;
 import java.util.Optional;
+import org.tsanet.connector.tsanet.dto.InboundCase;
 import org.tsanet.connector.tsanet.dto.PartnerHit;
 import org.tsanet.connector.tsanet.dto.ProcessForm;
 import org.tsanet.connector.tsanet.dto.SubmissionDraft;
@@ -53,4 +54,20 @@ public interface TsanetGateway {
 
     /** Reconcile a possibly-successful submission by its internalCaseNumber. */
     Optional<SubmissionResult> findSubmission(String internalCaseNumber);
+
+    /**
+     * Reads a collaboration case by its token, or empty when the API has no such case.
+     *
+     * <p>The inbound counterpart to {@link #findSubmission}: a case a partner created
+     * carries no internalCaseNumber of ours, so the token is the only handle that
+     * reaches it. Push payloads are thin — a type and a token — so every inbound
+     * handler starts here.
+     *
+     * <p>Empty means the API answered that no case exists (a parsed 404), which is a
+     * definitive answer a handler may act on. Every other failure throws, and an
+     * ambiguous one throws {@link GatewayTimeoutException} exactly as elsewhere in
+     * this contract: a read that may not have happened must not be reported as "no
+     * such case", because a handler would then treat a live partner case as absent.
+     */
+    Optional<InboundCase> fetchByToken(String token);
 }

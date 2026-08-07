@@ -21,6 +21,13 @@ connector:
       test-submission: ${TSANET_TEST_SUBMISSION:true}
   # fake = fixture Intercom gateway (dev/test); rest = real Intercom API (annotation
   # pipeline). The fake refuses the prod profile; rest mode fails fast without a token.
+  inbound:
+    # The Back-office ticket type that carries the TSANet attributes (token, partner,
+    # respond-by). PER WORKSPACE — the dev workspace's id is not the pilot's — so it
+    # has no default: unset means inbound cases are REFUSED rather than created as the
+    # wrong type, and the refusal is an error-level tsanet_audit line.
+    collaboration-ticket-type-id: ${INTERCOM_COLLABORATION_TICKET_TYPE_ID:}
+
   intercom:
     mode: fake
     access-token: ${INTERCOM_ACCESS_TOKEN:${INTERCOM_DEV_ACCESS_TOKEN:}}

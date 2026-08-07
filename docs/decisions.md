@@ -435,3 +435,70 @@ Files over SMB or NFS, decide between `locking_mode=EXCLUSIVE` with a reworked c
 model and a rollback journal (which costs the `synchronous=FULL` analysis above a fresh
 look) before that deploy, not after.
 
+
+## D13. Inbound intake speaks v2 CloudEvents, and refuses what it cannot route
+
+The intake read v1 field names (`payload.eventType`, `payload.requestToken`), so a v2
+delivery produced a null type and a null token and was queued anyway: an event no
+handler could claim, reporting nothing. The connector would have looked healthy while
+dropping every push.
+
+v2 only, deliberately. BETA and PROD both accept v1 and v2 registrations and **v1 is
+removed in the first part of 2027** — inside this connector's first year — so v1
+parsing would be dead code on arrival. v2 also carries the CloudEvent `id`, the only
+event-level idempotency key that exists; v1 has none. Existing members migrate
+separately (`tsanetgit/Zendesk_App#101`); that is not a reason for new work to speak
+both dialects.
+
+A body that is not a routable v2 event is refused at the door and logged at error with
+the keys it did carry, so a wrong-version registration surfaces on the first delivery
+instead of as silence. Still answered 200: redelivery cannot fix a shape. Types are
+the five in `webhook-asyncapi.yaml` on `beta`, read rather than assumed.
+
+## D14. One inbound case, one ticket: claim before create
+
+Checking the link table and then creating is a TOCTOU race — two deliveries of the same
+event both find no link and both create a ticket. That is not hypothetical: it is the
+duplicate-ticket defect already seen on the Zendesk connector, where `note.created`
+overtook `collaboration-request.created`.
+
+So the token's UNIQUE constraint arbitrates. `record()` reports whether THIS call
+inserted; exactly one caller wins and only the winner creates. Pinned by a concurrency
+probe, and verified by mutation: reverting to check-then-create fails that probe on
+every run and no other test in the class.
+
+Consequences, each deliberate:
+
+- **A failed create releases the claim**, which restores retryability. **It does not
+  restore the case**, and this entry must not be read as saying it does. There is no
+  re-drive path in the connector today, verified rather than assumed: the intake
+  answers 200 on every branch so TSANet does not redeliver, the handler catches
+  internally so the drain never re-offers, and there is no reconciliation poller (no
+  `@Scheduled` anywhere in the repo). A failed create therefore leaves an error-level
+  `inbound_ticket_create_failed` audit line carrying the release verdict, and recovery
+  is manual from that line. Releasing is still strictly better than holding — a manual
+  or future automatic retry CAN then succeed — but the guarantee is **recoverable, not
+  recovered**, and the inbound reconciliation poller (#51) is what makes it literal.
+  An earlier draft of this entry argued the trade-off "given the queue redelivers",
+  which was false; the QA round on the slice caught it.
+- **`releaseClaim` cannot delete an anchored link**, enforced in the SQL `WHERE` clause
+  rather than by caller discipline, so misuse degrades to a no-op instead of orphaning
+  a live case. The two stores express that guard differently (`ticketAnchored()` versus
+  `ticket_id IS NULL`), which made them disagree about a link anchored with a BLANK id:
+  the map store released it, the SQL store refused. In prod that means the token stays
+  claimed forever and no ticket is ever created — the silent loss the release exists to
+  prevent, in the store that actually runs. Fixed at the choke point instead of by
+  reconciling two predicates: `anchor()` refuses a blank id (and is write-once) in both
+  stores, so the guards agree by construction. Pinned by a contract case.
+- **Direction is checked before anything is claimed.** Push fires for cases in both
+  directions; a case we submitted already has its anchor, and unrecognised direction
+  values map to UNKNOWN rather than a guess, since a wrong guess creates a wrong ticket.
+- **Inbound links carry `inbound:<token>` as their internalCaseNumber.** A
+  partner-created case has none of ours, and both stores reject a null one for a good
+  reason (a link with no routing key has no route home). This is a **local, provisional
+  convention**, not estate policy.
+- **An unset ticket type refuses to create.** The type carries the attributes every
+  later slice reads; a ticket of the wrong type is worse than no ticket.
+
+Only `collaboration-request.created` is claimed. The other four push types belong to
+later slices and are deliberately left unclaimed, which the drain logs.

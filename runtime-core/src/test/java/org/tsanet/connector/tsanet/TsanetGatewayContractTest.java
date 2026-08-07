@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.tsanet.connector.tsanet.dto.InboundCase;
 import org.tsanet.connector.tsanet.dto.PartnerHit;
 import org.tsanet.connector.tsanet.dto.ProcessForm;
 import org.tsanet.connector.tsanet.dto.SubmissionDraft;
@@ -79,6 +80,40 @@ public abstract class TsanetGatewayContractTest {
     @Test
     void unknownInternalCaseNumberFindsNothing() {
         assertTrue(gateway().findSubmission("contract-never-" + UUID.randomUUID()).isEmpty());
+    }
+
+    /**
+     * The token a subclass can read back as an INBOUND case, or null when the
+     * environment has none. The SDK-backed subclass needs a real partner-originated
+     * case on BETA to answer this, which not every environment has.
+     */
+    protected String knownInboundToken() {
+        return null;
+    }
+
+    @Test
+    void anUnknownTokenIsAbsentRatherThanAnError() {
+        // A definitive "no such case" is something a handler acts on, so it must be an
+        // empty Optional and never an exception — an inbound handler that cannot tell
+        // "absent" from "the read failed" would treat a live partner case as absent.
+        assertTrue(gateway().fetchByToken("contract-never-" + UUID.randomUUID()).isEmpty());
+        assertTrue(gateway().fetchByToken(null).isEmpty(), "a null token is absent, not a crash");
+        assertTrue(gateway().fetchByToken("   ").isEmpty());
+    }
+
+    @Test
+    void aKnownTokenReadsBackWithItsDirection() {
+        String token = knownInboundToken();
+        if (token == null) {
+            return;
+        }
+        InboundCase found = gateway().fetchByToken(token)
+                .orElseThrow(() -> new AssertionError("known token did not read back: " + token));
+        assertEquals(token, found.token());
+        // direction is what decides whether a ticket gets created at all, so an
+        // implementation that cannot determine it must say UNKNOWN rather than guess.
+        assertNotNull(found.direction());
+        assertTrue(found.inbound(), "the fixture token must be a partner-originated case");
     }
 
     @Test

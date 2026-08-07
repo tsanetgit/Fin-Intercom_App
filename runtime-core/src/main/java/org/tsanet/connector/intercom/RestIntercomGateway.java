@@ -2,6 +2,7 @@ package org.tsanet.connector.intercom;
 
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -193,6 +194,115 @@ public class RestIntercomGateway implements IntercomGateway {
         } catch (RuntimeException e) {
             log.warn("intercom_unhealthy reason={}", e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Contact used for every inbound ticket. Tickets require exactly one contact even
+     * for Back-office types (D5), and the partner is not an Intercom user, so a stable
+     * synthetic one stands in. Found by external_id before create so redeliveries and
+     * later cases reuse it rather than littering the workspace with duplicates.
+     */
+    static final String SYNTHETIC_CONTACT_EXTERNAL_ID = "tsanet-partner";
+    static final String SYNTHETIC_CONTACT_EMAIL = "tsanet-partner@example.invalid";
+
+    @Override
+    public String createCollaborationTicket(InboundTicketRequest request) {
+        String contactId = syntheticContactId();
+        Map<String, Object> attrs = new LinkedHashMap<>();
+        attrs.put("_default_title_", title(request));
+        attrs.put("_default_description_", request.description());
+        attrs.put(ATTR_TOKEN, request.token());
+        attrs.put(ATTR_PARTNER, request.partnerCompany());
+        Long respondByEpoch = toEpochSeconds(request.respondBy());
+        if (respondByEpoch != null) {
+            attrs.put(ATTR_RESPOND_BY, respondByEpoch);
+        }
+        Map<String, Object> body = Map.of(
+                "ticket_type_id", request.ticketTypeId(),
+                "contacts", List.of(Map.of("id", contactId)),
+                "ticket_attributes", attrs);
+        Map<?, ?> created;
+        try {
+            created = http.postForObject(baseUrl + "/tickets", body, Map.class);
+        } catch (RestClientResponseException e) {
+            throw fail("ticket-create", e);
+        }
+        Object id = created == null ? null : created.get("id");
+        if (id == null) {
+            // No id means no anchor, and the caller must be able to release its claim
+            // and let a redelivery retry — reporting success here would strand the
+            // case with a claimed token and no ticket.
+            throw new IntercomException("Intercom accepted the ticket create but returned no id");
+        }
+        String ticketId = String.valueOf(id);
+        verifyTokenLanded(ticketId, request.token());
+        log.info("tsanet_audit event=inbound_ticket_created ticket={} token={} partner={} test={}",
+                ticketId, request.token(), request.partnerCompany(), request.testCase());
+        return ticketId;
+    }
+
+    /** A test case must be unmistakable on the agent's screen, not just in an attribute. */
+    private static String title(InboundTicketRequest request) {
+        String summary = request.summary() == null || request.summary().isBlank()
+                ? "TSANet collaboration request"
+                : request.summary();
+        return request.testCase() ? "[TEST] " + summary : summary;
+    }
+
+    /**
+     * The synthetic contact, created once and reused. Search-then-create races only
+     * with itself: a duplicate contact is untidy, never wrong, and the ticket claim
+     * upstream is what guarantees one ticket per case.
+     */
+    private String syntheticContactId() {
+        try {
+            Map<?, ?> found = http.postForObject(baseUrl + "/contacts/search", Map.of(
+                    "query", Map.of("field", "external_id", "operator", "=",
+                            "value", SYNTHETIC_CONTACT_EXTERNAL_ID)), Map.class);
+            Object data = found == null ? null : found.get("data");
+            if (data instanceof List<?> rows && !rows.isEmpty()
+                    && rows.get(0) instanceof Map<?, ?> row && row.get("id") != null) {
+                return String.valueOf(row.get("id"));
+            }
+        } catch (RestClientResponseException e) {
+            // A failed search is not a failed create: fall through and let the create
+            // decide. Intercom rejects a duplicate external_id, which surfaces there.
+            log.warn("intercom_http_error op=contact-search status={}", e.getStatusCode().value());
+        }
+        Map<?, ?> created;
+        try {
+            created = http.postForObject(baseUrl + "/contacts", Map.of(
+                    "role", "user",
+                    "external_id", SYNTHETIC_CONTACT_EXTERNAL_ID,
+                    "email", SYNTHETIC_CONTACT_EMAIL,
+                    "name", "TSANet Partner (synthetic)"), Map.class);
+        } catch (RestClientResponseException e) {
+            throw fail("contact-create", e);
+        }
+        Object id = created == null ? null : created.get("id");
+        if (id == null) {
+            throw new IntercomException("Intercom accepted the contact create but returned no id");
+        }
+        return String.valueOf(id);
+    }
+
+    /** D3 again: the create's 200 means nothing until the token reads back. */
+    private void verifyTokenLanded(String ticketId, String token) {
+        Map<?, ?> ticket;
+        try {
+            ticket = http.getForObject(baseUrl + "/tickets/" + ticketId, Map.class);
+        } catch (RestClientResponseException e) {
+            throw fail("ticket-read-back", e);
+        }
+        Object attrs = ticket == null ? null : ticket.get("ticket_attributes");
+        Object landed = attrs instanceof Map<?, ?> map ? map.get(ATTR_TOKEN) : null;
+        // Compare as text: a JSON layer that coerces the value to a non-String would
+        // otherwise fail this read-back, release the claim, and loop redelivery
+        // forever — the safety net becoming the outage.
+        if (landed == null || !token.equals(String.valueOf(landed))) {
+            throw new IntercomException("ticket " + ticketId + " was created but the '" + ATTR_TOKEN
+                    + "' attribute did not read back; the workspace may have renamed it");
         }
     }
 

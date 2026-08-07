@@ -126,6 +126,51 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
     }
 
     @Override
+    public boolean releaseClaim(String token) {
+        if (token == null) {
+            return false;
+        }
+        Entry entry = byToken.get(token);
+        if (entry == null) {
+            return false;
+        }
+        SubmissionLink link = entry.link();
+        if (link.ticketAnchored() || link.conversationId() != null) {
+            return false; // anchored: a real route home, never removable
+        }
+        if (!byToken.remove(token, entry)) {
+            return false;
+        }
+        tokenByInternal.remove(link.internalCaseNumber(), token);
+        return true;
+    }
+
+    @Override
+    public void anchor(String token, String ticketId) {
+        if (token == null || ticketId == null || ticketId.isBlank()) {
+            return; // a blank id is not an anchor; see the interface javadoc
+        }
+        Entry existing = byToken.get(token);
+        if (existing != null && existing.link().ticketAnchored()) {
+            log.error("tsanet_audit event=anchor_rejected_already_set token={} existing={} offered={}",
+                    token, existing.link().ticketId(), ticketId);
+            return;
+        }
+        if (!byToken.containsKey(token)) {
+            // The ticket exists but its link does not: log loudly rather than drop it,
+            // because the audit line is the only path back to a stranded anchor.
+            log.error("tsanet_audit event=anchor_orphaned token={} ticket={}", token, ticketId);
+            return;
+        }
+        byToken.computeIfPresent(token, (key, entry) -> {
+            SubmissionLink l = entry.link();
+            return new Entry(new SubmissionLink(l.token(), l.internalCaseNumber(), l.workspaceId(),
+                    l.conversationId(), ticketId, l.partnerDisplay(), l.respondBy(), l.testCase(),
+                    l.submittedBy(), l.submittedAt()), entry.annotation());
+        });
+    }
+
+    @Override
     public int size() {
         return byToken.size();
     }

@@ -22,6 +22,22 @@ public interface IntercomGateway {
      */
     AnnotationOutcome annotate(SubmissionLink link);
 
+    /**
+     * Creates the ticket that anchors an inbound partner case, and returns its id.
+     *
+     * <p>Called only by the inbound handler, and only after that handler has WON the
+     * link-table claim on the case token — so this method never has to be idempotent
+     * with respect to the case. It does have to be idempotent with respect to the
+     * synthetic partner contact: tickets require exactly one contact (D5), and a
+     * fresh contact per delivery would litter the workspace, so implementations find
+     * the contact by its stable external id before creating one.
+     *
+     * <p>Throws {@link IntercomException} when no ticket landed. The caller releases
+     * its claim on that, so a redelivery can retry cleanly rather than the token
+     * being permanently marked as handled.
+     */
+    String createCollaborationTicket(InboundTicketRequest request);
+
     /** Cheap credential/reachability probe (GET /me). */
     boolean healthy();
 

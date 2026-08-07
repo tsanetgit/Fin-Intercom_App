@@ -12,6 +12,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import org.tsanet.connector.tsanet.dto.FormField;
+import org.tsanet.connector.tsanet.dto.InboundCase;
 import org.tsanet.connector.tsanet.dto.PartnerHit;
 import org.tsanet.connector.tsanet.dto.ProcessForm;
 import org.tsanet.connector.tsanet.dto.SubmissionDraft;
@@ -118,6 +119,37 @@ public class FakeTsanetGateway implements TsanetGateway {
     @Override
     public Optional<SubmissionResult> findSubmission(String internalCaseNumber) {
         return Optional.ofNullable(submitted.get(internalCaseNumber));
+    }
+
+    /**
+     * Fixture inbound cases, keyed by token. A token starting {@code failfetch} throws
+     * (so handlers can be built against a failing read), {@code inbound-} yields a
+     * partner-originated case, and {@code outbound-} yields one of our own — the case
+     * a handler must NOT create a ticket for. Anything else is unknown.
+     */
+    @Override
+    public Optional<InboundCase> fetchByToken(String token) {
+        if (token == null || token.isBlank()) {
+            return Optional.empty();
+        }
+        if (token.startsWith("failfetch")) {
+            throw new GatewayException("Connect API rejected the request (HTTP 500, fetchByToken)");
+        }
+        if (token.startsWith("timeoutfetch")) {
+            throw new GatewayTimeoutException("Connect API timed out (fetchByToken, >1500ms)");
+        }
+        if (token.startsWith("inbound-")) {
+            return Optional.of(new InboundCase(token, InboundCase.Direction.INBOUND,
+                    InboundCase.Status.OPEN, "NetApp", "Replica lag on shared array",
+                    "Customer reports 40s lag since 03:00 UTC", "2026-08-08T12:00:00Z",
+                    "HIGH", true));
+        }
+        if (token.startsWith("outbound-")) {
+            return Optional.of(new InboundCase(token, InboundCase.Direction.OUTBOUND,
+                    InboundCase.Status.OPEN, "NetApp", "Our own request", "we sent this",
+                    "2026-08-08T12:00:00Z", "MEDIUM", true));
+        }
+        return Optional.empty();
     }
 
     private static final List<PartnerHit> FIXTURE_PARTNERS = buildFixtures();
