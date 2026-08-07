@@ -25,9 +25,17 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn -B clean verify
 JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn -B -P sdk clean verify
 ```
 
-The `sdk` profile needs `connect-library` in the local Maven repository (built from
-`shawn-tsanet/connect-sdk-demo`, which needs `tsanetgit/Connect-API-Code` as a sibling
-checkout on the `beta` branch). Plain `mvn verify` is always green on a fresh clone.
+The `sdk` profile needs `connect-library` in the local Maven repository, built from
+`shawn-tsanet/connect-sdk-demo`. Its codegen reads the spec vendored here at
+`third_party/connect-api/openapi.yaml`, so no `Connect-API-Code` sibling checkout and
+no private-repo access are required:
+
+```bash
+mvn -B -f ../connect-sdk-demo/pom.xml -pl connect-library -am install -DskipTests \
+  -Dconnect.openapi.spec=$PWD/third_party/connect-api/openapi.yaml
+```
+
+Plain `mvn verify` is always green on a fresh clone.
 
 Run locally:
 
@@ -47,9 +55,12 @@ is the only open route.
 
 ## CI
 
-`ci.yml` builds and tests `runtime-core` on every push (always green, no secrets
-needed). The `sdk` job bootstraps the sibling checkouts and runs the `sdk` profile only
-when the `CONNECT_API_CODE_TOKEN` secret is configured (Connect-API-Code is private).
+`ci.yml` builds and tests `runtime-core`, and the `sdk` job builds `connect-library`
+from the pinned public demo repo against the vendored spec, then runs the `sdk`
+profile. **Both jobs run on every PR and neither needs a secret.** The `sdk` job was
+previously gated on `CONNECT_API_CODE_TOKEN` for a private checkout; that secret was
+never configured, so the job skipped every real step while reporting success — the
+gateway tests had never run in CI.
 
 ## Status
 

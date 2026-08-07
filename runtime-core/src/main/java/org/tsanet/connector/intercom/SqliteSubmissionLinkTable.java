@@ -20,7 +20,7 @@ import org.sqlite.SQLiteConfig;
 import org.sqlite.SQLiteDataSource;
 
 /**
- * Durable link table on a local SQLite file (docs/decisions.md D11). Same never-evicting
+ * Durable link table on a local SQLite file (docs/decisions.md D12). Same never-evicting
  * contract as the in-memory table, but a restart no longer orphans every case: this is
  * the Phase-2 inbound precondition D10 named.
  *

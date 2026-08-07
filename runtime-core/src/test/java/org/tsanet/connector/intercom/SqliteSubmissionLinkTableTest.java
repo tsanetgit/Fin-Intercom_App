@@ -18,7 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * The durable store against the shared contract, plus the properties that only a durable
  * store can have: surviving a reopen, and failing loudly rather than losing a link
- * (docs/decisions.md D11).
+ * (docs/decisions.md D12).
  */
 class SqliteSubmissionLinkTableTest extends SubmissionLinkTableContractTest {
 

@@ -28,7 +28,7 @@ connector:
     api-base-url: https://api.intercom.io
   # memory = volatile map table (dev/test; refused under the prod profile); sqlite =
   # durable file store. Links are the only route home for an open case, so a restart on
-  # the memory store orphans every one of them (docs/decisions.md D10, D11). The file
+  # the memory store orphans every one of them (docs/decisions.md D10, D12). The file
   # must sit on storage that outlives the container - the boot log prints its absolute
   # path so a mis-mounted volume is visible rather than silent.
   links:

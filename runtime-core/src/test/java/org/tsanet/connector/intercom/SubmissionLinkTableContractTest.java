@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The link-table contract both stores must pass: the in-memory table and the durable
- * SQLite one (docs/decisions.md D11). Routing correctness is the whole point of this
+ * SQLite one (docs/decisions.md D12). Routing correctness is the whole point of this
  * table, so the semantics live here rather than in either implementation's own tests —
  * a divergence between the two is a case that cannot be routed home, and this is what
  * makes it a test failure instead of a production symptom.
@@ -171,7 +171,7 @@ public abstract class SubmissionLinkTableContractTest {
         // prospective and cannot fail against either current store — every secondary
         // lookup in the map store resolves through byToken, so a dangling entry is masked,
         // and the SQL store keeps one row. They are kept for a store that maintains its
-        // indexes independently, which is what Postgres at GA would be. See D11; do not
+        // indexes independently, which is what Postgres at GA would be. See D12; do not
         // read them as covering the case above.
         //
         // IllegalStateException specifically, not any RuntimeException: an unguarded

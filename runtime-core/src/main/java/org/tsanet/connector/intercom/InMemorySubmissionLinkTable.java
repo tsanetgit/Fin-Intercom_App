@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Never-evicting in-memory link table (Phase 1); see the interface for why. Volatile by
  * construction, so {@link LinkTableConfiguration} wires it only outside the prod profile;
- * {@link SqliteSubmissionLinkTable} is the durable store (docs/decisions.md D11).
+ * {@link SqliteSubmissionLinkTable} is the durable store (docs/decisions.md D12).
  */
 public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
 

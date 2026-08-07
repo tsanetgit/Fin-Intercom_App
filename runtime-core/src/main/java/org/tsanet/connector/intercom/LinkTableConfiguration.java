@@ -10,7 +10,7 @@ import org.springframework.core.env.Environment;
 
 /**
  * Chooses the link store: {@code connector.links.store=memory} (default, for tests and
- * local development) or {@code sqlite} (durable, docs/decisions.md D11).
+ * local development) or {@code sqlite} (durable, docs/decisions.md D12).
  *
  * <p>Every way of ending up without a durable store in production is refused at startup,
  * because none of them announces itself later: the failure mode is not a wrong answer but
@@ -19,7 +19,7 @@ import org.springframework.core.env.Environment;
  * store value that selects no bean is rejected by name rather than surfacing as a
  * NoSuchBeanDefinitionException, and under prod the SQLite path must be absolute, since a
  * relative one resolves against the container working directory — the overlay filesystem
- * D11 warns about, wearing a durable store's name.
+ * D12 warns about, wearing a durable store's name.
  */
 @Configuration
 @EnableConfigurationProperties(LinkTableConfiguration.LinkProperties.class)
