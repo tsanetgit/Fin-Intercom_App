@@ -143,6 +143,37 @@ class InboundClosureHandlerTest {
     }
 
     @Test
+    void aRedeliveryAfterALostCasRepeatsOnlyAnIdempotentWrite() {
+        // The hole #27's auto-QA found, and nothing covered it. If the CAS never wins,
+        // the recorded state stays un-closed — and the already-closed guard reads THAT,
+        // so the next delivery calls the platform again. The claim "idempotent under
+        // redelivery" was therefore true only when the CAS won.
+        //
+        // It stays safe, and this pins WHY: the repeat targets the same terminal state,
+        // so the second write is a no-op in effect rather than a second distinct change.
+        linkAnchored(TOKEN, TICKET);
+        SubmissionLinkTable neverCas = new DelegatingLinkTable(links) {
+            @Override
+            public boolean caseState(String token, CaseState expected, CaseState next) {
+                return false;   // an agent wins every race, forever
+            }
+        };
+        InboundClosureHandler h = new InboundClosureHandler(intercom, neverCas,
+                InboundProperties.ofTicketTypeAndResolvedState("4561712", RESOLVED));
+
+        h.handle(closed(TOKEN));
+        assertEquals(RESOLVED, intercom.stateOf(TICKET), "the ticket still resolves");
+        assertEquals(1, intercom.stateMoveCalls());
+
+        h.handle(closed(TOKEN));   // redelivery, with the record still un-closed
+
+        assertEquals(2, intercom.stateMoveCalls(),
+                "the repeat is expected once the CAS is lost — this pins it as KNOWN, not silent");
+        assertEquals(RESOLVED, intercom.stateOf(TICKET),
+                "and it is idempotent in effect: same terminal state, so nothing else moved");
+    }
+
+    @Test
     void theHandlerClaimsOnlyClosureEvents() {
         InboundClosureHandler h = handler(RESOLVED);
         assertTrue(h.handles(closed(TOKEN)));

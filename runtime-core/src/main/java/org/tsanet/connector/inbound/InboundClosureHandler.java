@@ -43,6 +43,15 @@ public class InboundClosureHandler implements InboundEventHandler {
 
     private static final Logger log = LoggerFactory.getLogger(InboundClosureHandler.class);
 
+    /**
+     * The competing writer is an agent clicking in the panel, which writes at most once
+     * per action, so a loop that re-reads converges quickly. Two attempts was too few to
+     * justify the word "bounded" and the residual was not free: a lost CAS leaves the
+     * recorded state un-closed, the already-closed guard reads THAT, and the next
+     * redelivery therefore calls the platform again (#27 auto-QA).
+     */
+    private static final int CAS_ATTEMPTS = 5;
+
     private final IntercomGateway intercom;
     private final SubmissionLinkTable links;
     private final String resolvedStateId;
@@ -113,13 +122,26 @@ public class InboundClosureHandler implements InboundEventHandler {
         // is what the agent sees — and only our record of WHY is stale, so this logs
         // rather than looping.
         if (!moveStateToClosed(token)) {
+            // The ticket IS resolved — that write succeeded and is what an agent sees.
+            // Only our record is stale, and the consequence is now stated rather than
+            // left implicit: a redelivery re-runs the platform move. That is safe because
+            // it targets the SAME terminal state, so it is idempotent in effect and the
+            // read-back still passes. Loud, because a persistent loss here means
+            // something is writing this row far more often than an agent can click.
             log.warn("tsanet_audit event=closure_state_not_recorded token={} ticket={}"
-                            + " reason=lost_compare_and_set observed={}",
-                    token, link.ticketId(), links.caseState(token));
+                            + " reason=lost_compare_and_set attempts={} observed={}"
+                            + " consequence=redelivery_repeats_an_idempotent_write",
+                    token, link.ticketId(), CAS_ATTEMPTS, links.caseState(token));
             return;
         }
-        log.info("tsanet_audit event=closure_applied token={} ticket={} partner={}",
-                token, link.ticketId(), link.partnerDisplay());
+        // state_id on the line so a misconfigured-but-terminal id is VISIBLE. The
+        // read-back asserts the ticket closed, not that it closed into the state we
+        // named — without an id-to-name mapping (only reachable under
+        // Intercom-Version: Unstable, D17) it cannot. Naming the id we used turns a
+        // silently-wrong configuration into one an operator can spot in the audit
+        // stream (#27 auto-QA).
+        log.info("tsanet_audit event=closure_applied token={} ticket={} partner={} state_id={}",
+                token, link.ticketId(), link.partnerDisplay(), resolvedStateId);
     }
 
     /**
@@ -129,7 +151,7 @@ public class InboundClosureHandler implements InboundEventHandler {
      * retrying once if an agent won the race in between.
      */
     private boolean moveStateToClosed(String token) {
-        for (int attempt = 0; attempt < 2; attempt++) {
+        for (int attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
             CaseState current = links.caseState(token);
             if (current == CaseState.CLOSED) {
                 return true;
