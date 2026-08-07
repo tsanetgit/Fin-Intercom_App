@@ -63,7 +63,12 @@ public interface IntercomGateway {
      * moved, and the ticket would sit open with the partner's case closed.
      *
      * <p>The verification asserts the ticket is CLOSED (its {@code open} flag is false),
-     * not that it carries one particular state name. Every state this connector writes
+     * not that it carries one particular state name. <b>So a wrong-but-terminal state id
+     * passes it</b> — a misconfiguration naming some other closing state in the same
+     * workspace verifies clean. That residual is accepted because there is no id-to-name
+     * mapping available (D17: state ids are only enumerable under
+     * {@code Intercom-Version: Unstable}, which must not be in a runtime path), and it is
+     * mitigated by the caller logging the id it used. Every state this connector writes
      * is terminal, and asserting on the flag keeps the check working when a workspace
      * renames its states — which D17 records that it may, since state ids and labels are
      * per-workspace. An implementation that needs to write a non-terminal state must
