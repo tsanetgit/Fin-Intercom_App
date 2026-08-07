@@ -20,7 +20,7 @@
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
     <dependency>
-      <!-- Durable link table (docs/decisions.md D11). Version managed by the Spring Boot
+      <!-- Durable link table (docs/decisions.md D12). Version managed by the Spring Boot
            parent. Raw JDBC on purpose: spring-boot-starter-jdbc would pull in DataSource
            auto-configuration and HikariCP, which fight the hand-built SQLiteDataSource. -->
       <groupId>org.xerial</groupId>

@@ -150,6 +150,12 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
         if (token == null || ticketId == null) {
             return;
         }
+        if (!byToken.containsKey(token)) {
+            // The ticket exists but its link does not: log loudly rather than drop it,
+            // because the audit line is the only path back to a stranded anchor.
+            log.error("tsanet_audit event=anchor_orphaned token={} ticket={}", token, ticketId);
+            return;
+        }
         byToken.computeIfPresent(token, (key, entry) -> {
             SubmissionLink l = entry.link();
             return new Entry(new SubmissionLink(l.token(), l.internalCaseNumber(), l.workspaceId(),

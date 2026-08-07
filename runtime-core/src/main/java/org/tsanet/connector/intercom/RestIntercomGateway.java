@@ -297,7 +297,10 @@ public class RestIntercomGateway implements IntercomGateway {
         }
         Object attrs = ticket == null ? null : ticket.get("ticket_attributes");
         Object landed = attrs instanceof Map<?, ?> map ? map.get(ATTR_TOKEN) : null;
-        if (!token.equals(landed)) {
+        // Compare as text: a JSON layer that coerces the value to a non-String would
+        // otherwise fail this read-back, release the claim, and loop redelivery
+        // forever — the safety net becoming the outage.
+        if (landed == null || !token.equals(String.valueOf(landed))) {
             throw new IntercomException("ticket " + ticketId + " was created but the '" + ATTR_TOKEN
                     + "' attribute did not read back; the workspace may have renamed it");
         }

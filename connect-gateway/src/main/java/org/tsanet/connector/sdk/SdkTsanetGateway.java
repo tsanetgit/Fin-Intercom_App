@@ -413,21 +413,23 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         if (token == null || token.isBlank()) {
             return Optional.empty();
         }
-        CollaborationRequestStatusDTO dto;
-        try {
-            dto = bounded("fetch", config.readDeadlineMillis(),
-                    () -> collaborations.getCollaborationRequestByToken(token, Boolean.FALSE));
-        } catch (GatewayException e) {
-            // A parsed 404 is the API answering "no such case", which is a definitive
-            // result a handler acts on. Everything else keeps its taxonomy: an
-            // ambiguous read must not read as absence, or a handler treats a live
-            // partner case as one that never existed.
-            if (e.getMessage() != null && e.getMessage().contains("HTTP 404")) {
-                return Optional.empty();
+        // "No such case" is decided on the HTTP STATUS, inside the call, and never by
+        // matching a substring of a sanitized message: this is the definitive-versus-
+        // ambiguous boundary the no-second-ticket guarantee rests on, and a message
+        // format change elsewhere must not be able to move it. Everything else keeps
+        // the contract's taxonomy — an ambiguous read must not read as absence, or a
+        // handler treats a live partner case as one that never existed.
+        CollaborationRequestStatusDTO dto = bounded("fetch", config.readDeadlineMillis(), () -> {
+            try {
+                return collaborations.getCollaborationRequestByToken(token, Boolean.FALSE);
+            } catch (HttpClientErrorException.NotFound absent) {
+                return null;
             }
-            throw e;
+        });
+        if (dto == null) {
+            return Optional.empty();
         }
-        if (dto == null || dto.getToken() == null || dto.getToken().isBlank()) {
+        if (dto.getToken() == null || dto.getToken().isBlank()) {
             // Same rule as find's token-less row (D3): a case we cannot key is not a
             // case we can route, and reporting absence would invite a second ticket.
             log.warn("tsanet_gateway_tokenless_row op=fetch");

@@ -244,7 +244,9 @@ public class SqliteSubmissionLinkTable implements SubmissionLinkTable {
                         "UPDATE submission_link SET ticket_id = ? WHERE token = ?")) {
             ps.setString(1, ticketId);
             ps.setString(2, token);
-            ps.executeUpdate();
+            if (ps.executeUpdate() == 0) {
+                log.error("tsanet_audit event=anchor_orphaned token={} ticket={}", token, ticketId);
+            }
         } catch (SQLException e) {
             throw new IllegalStateException("cannot anchor a submission link", e);
         }
