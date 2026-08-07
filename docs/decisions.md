@@ -226,3 +226,51 @@ the token so the manual re-drive path holds even then. One more honest gap: HIDD
 form fields are ASSUMED to be filled server-side from the form template (no live
 receipt yet - sdk2's form has none); if the API instead expects the client to echo
 template values, submission fails loud and problem+json detail names the field.
+
+## D11. The API spec is vendored, so CI needs no cross-org credential
+
+`connect-library`'s codegen reads the Connect transport contract through the Maven
+property `connect.openapi.spec`, defined in the demo repo's parent pom as a sibling
+path into the PRIVATE `tsanetgit/Connect-API-Code` and used exactly once, as
+`inputSpec`. Satisfying that sibling in CI meant a cross-org token, and the sdk job
+gated every real step on `CONNECT_API_CODE_TOKEN` being present. It never was: the
+job skipped everything and **reported success**, so the connect-gateway tests -
+including the sanitizer parity guard hardened across three review rounds - had never
+executed in CI. A green sdk check meant nothing.
+
+The credential was not obtainable by us either. A fine-grained PAT for an org-owned
+repo needs a `tsanetgit` owner's approval (we are a member), and a deploy key needs
+admin on `Connect-API-Code` (we have pull). Rather than provision a broad classic PAT
+- read AND write across every org repo reachable, in a CI secret, while credential
+rotation is still open - the dependency is removed: the spec is one 80KB file, so it
+lives at `third_party/connect-api/openapi.yaml`, byte-identical to upstream, and the
+build overrides the property to point at it. The sdk job now runs unconditionally on
+every PR with no secret at all.
+
+Consequences accepted, each with its control:
+- **Drift.** A vendored copy can fall behind `beta`. Connector CI structurally cannot
+  detect this (no access, by design), so the check belongs in tsanet-ops, and the
+  substrate is already there: `scripts/mirror-github.py` snapshots exactly this repo
+  and path on branches including `beta` into `tsanet_ops.api_spec_snapshots`, whose
+  `content_hash` is `hashlib.sha256(raw).hexdigest()` - the same algorithm over the
+  same bytes as the `sha256` recorded in the sidecar README, so the check is a direct
+  equality test, not a diff. Drift is advisory: pinning is what makes codegen
+  deterministic, and a mismatch means refresh deliberately.
+- **Provenance must not rot.** Source repo, ref, commit, date, size and sha256 live in
+  a sidecar README rather than a header inside the YAML, because a comment in the file
+  would break the byte-comparison the drift check depends on.
+- **Supply chain.** With the gate gone, an unpinned demo checkout would let a push to
+  another repo change what our CI compiles, so `connect-sdk-demo` is pinned to a commit
+  and bumps are reviewed changes. The pinned demo ref and the vendored spec commit are
+  a MATCHED PAIR, verified together by the sdk job: a bump moves both, or says why the
+  other did not need to move.
+- **Visibility.** The spec was gated behind Connect-API-Code's ACL and is now gated
+  behind this repo's, so this repo must not be made public without upstream sign-off,
+  and the file persists in git history even if later removed. The widening is modest -
+  the public demo repo already ships the SDK that consumes this API - but it is a
+  widening, and it is deliberate. Contents were scanned before vendoring: the only
+  URLs are the three documented environment hosts plus Entra's login endpoint, and
+  every credential-shaped name is a schema property declaration, not a value.
+
+This does not fork the SDK (D6 stands): the spec is a build INPUT, pinned for
+reproducibility, and the SDK modules are still consumed verbatim from upstream.

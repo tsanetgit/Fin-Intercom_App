@@ -34,45 +34,37 @@ jobs:
         run: mvn -B --no-transfer-progress clean verify
 
   sdk:
-    # Builds the connect-gateway module against connect-library built from source.
-    # Connect-API-Code is private, so every real step is gated on the secret being
-    # configured (the secrets context is not available in a job-level `if`).
+    # Builds connect-gateway against connect-library built from source. The spec
+    # its codegen needs is vendored at third_party/connect-api/openapi.yaml, so
+    # this job reaches no private repository and runs UNCONDITIONALLY on every
+    # PR. It used to be gated on CONNECT_API_CODE_TOKEN, which was never
+    # configured — so it skipped every real step while reporting success, and the
+    # gateway tests (including the sanitizer drift guard) never ran in CI. See
+    # third_party/connect-api/README.md for provenance, refresh and drift.
     runs-on: ubuntu-latest
     needs: core
     steps:
-      - name: Check for Connect-API-Code token
-        id: gate
-        env:
-          TOKEN: ${{ secrets.CONNECT_API_CODE_TOKEN }}
-        run: |
-          if [ -n "$TOKEN" ]; then echo "has=true" >> "$GITHUB_OUTPUT"; else echo "has=false" >> "$GITHUB_OUTPUT"; echo "CONNECT_API_CODE_TOKEN not configured; skipping sdk profile build"; fi
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.has == 'true'
         with:
           path: connector
       - uses: actions/setup-java@v4
-        if: steps.gate.outputs.has == 'true'
         with:
           distribution: temurin
           java-version: "21"
           cache: maven
       - name: Checkout connect-sdk-demo (public; carries the verbatim SDK modules)
-        if: steps.gate.outputs.has == 'true'
         uses: actions/checkout@v4
         with:
           repository: shawn-tsanet/connect-sdk-demo
+          # Pinned deliberately: this job installs what it builds here, so an
+          # unpinned default branch would let a push to another repo change what
+          # our CI compiles. Bump as a reviewed change.
+          ref: 9ef7107d3aa9f8a8b2b5f3321ddec4326be08d60
           path: connect-sdk-demo
-      - name: Checkout Connect-API-Code on beta (codegen sibling; develop breaks codegen)
-        if: steps.gate.outputs.has == 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: tsanetgit/Connect-API-Code
-          ref: beta
-          token: ${{ secrets.CONNECT_API_CODE_TOKEN }}
-          path: Connect-API-Code
-      - name: Install connect-library
-        if: steps.gate.outputs.has == 'true'
-        run: mvn -B --no-transfer-progress -f connect-sdk-demo/pom.xml -pl connect-library -am install -DskipTests
+      - name: Install connect-library (codegen reads the vendored spec)
+        run: >
+          mvn -B --no-transfer-progress -f connect-sdk-demo/pom.xml
+          -pl connect-library -am install -DskipTests
+          -Dconnect.openapi.spec=${{ github.workspace }}/connector/third_party/connect-api/openapi.yaml
       - name: Build connector with sdk profile
-        if: steps.gate.outputs.has == 'true'
         run: mvn -B --no-transfer-progress -f connector/pom.xml -P sdk clean verify
