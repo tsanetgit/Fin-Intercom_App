@@ -93,8 +93,16 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
      * answer a partner who may already have been answered. Mapping ambiguity to
      * rejection is the single most consequential error available here, and it does not
      * stop being one because the mutation is a response instead of a create.
+     *
+     * <p>Broadening this set is not sufficient on its own: the FIRST fix left a second
+     * {@code "submit".equals(op)} literal live in {@link #bounded}'s interrupt branch,
+     * so an interrupted approve still read as definitive (#17 QA round 2). Every
+     * ambiguity decision in this class now asks this set, and no other place may
+     * compare an op name to a literal. Package-private so the test iterates THIS set
+     * rather than a copy — a hand-listed set in the test would drift exactly the way
+     * the literal did.
      */
-    private static final Set<String> MUTATING_OPS = Set.of("submit", "approve", "reject", "information");
+    static final Set<String> MUTATING_OPS = Set.of("submit", "approve", "reject", "information");
     private static final com.fasterxml.jackson.databind.ObjectMapper PROBLEM_MAPPER =
             new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -548,10 +556,14 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             future.cancel(true);
-            if ("submit".equals(op)) {
-                // The create may already be on the wire: ambiguous like any other
-                // submit fault, or the interruption re-arms a duplicate submit.
-                throw new GatewayTimeoutException("Connect API call interrupted (submit); outcome unknown");
+            if (MUTATING_OPS.contains(op)) {
+                // The request may already be on the wire — future.cancel(true) fires
+                // after it may have been dispatched — so the partner may already have
+                // it. That reasoning never depended on the op being submit: an
+                // interrupted approve read as definitive lets the panel hand the state
+                // back and re-offer the action to a partner who was already answered.
+                throw new GatewayTimeoutException(
+                        "Connect API call interrupted (" + op + "); outcome unknown");
             }
             throw new GatewayException("Connect API call interrupted (" + op + ")");
         } catch (ExecutionException e) {

@@ -546,6 +546,14 @@ the suite was green on exactly the property this entry exists to protect (#17 QA
 round). Accept now REFUSES when no searchable number was captured, because quoting the
 handle fails silently — on a phone call, days later — while refusing is recoverable.
 
+That refusal has one permanent case. A row created before `case_number` existed is
+migrated with it NULL, the number is only ever captured at ticket-create time, and
+nothing backfills it — so accept is refused on that row forever, with no recovery short
+of manual intervention. It is fail-safe and the message says so, and the real population
+is approximately zero because inbound create itself only landed one slice earlier.
+Recorded rather than fixed: a backfill needs a ticket read per orphaned row, which
+belongs with the reconciliation poller if it is ever worth doing (#17 QA round 2).
+
 **Ambiguity is durable for outbound and transient here, and that asymmetry is a known
 gap.** An ambiguous response tells the agent the outcome is unknown, but the recorded
 state has already moved, so a later render (second agent, second tab, after a restart)

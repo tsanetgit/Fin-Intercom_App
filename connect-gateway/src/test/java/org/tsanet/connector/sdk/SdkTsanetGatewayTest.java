@@ -29,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -37,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
@@ -193,6 +195,8 @@ class SdkTsanetGatewayTest {
     static final class StubCaseResponses extends com.tsanet.api.generated.api.CaseResponsesApi {
         final AtomicReference<Object> lastBody = new AtomicReference<>();
         volatile RuntimeException failWith;
+        /** Runs before the response is recorded, so a probe can hold the worker in flight. */
+        volatile Runnable onRespond = () -> { };
 
         @Override
         public CollaborationRequestStatusDTO approveCollaborationRequest(String token,
@@ -213,6 +217,7 @@ class SdkTsanetGatewayTest {
         }
 
         private CollaborationRequestStatusDTO record(Object body) {
+            onRespond.run();
             lastBody.set(body);
             if (failWith != null) {
                 throw failWith;
@@ -463,10 +468,15 @@ class SdkTsanetGatewayTest {
     }
 
     @Test
-    void interruptedSubmitIsAmbiguousNotDefinitive() {
-        // An interrupted wait proves nothing about the create request already on the
-        // wire; mapping it to plain GatewayException would re-arm DRAFT and invite a
-        // duplicate submit (advisor catch on the pre-PR review).
+    void interruptIsAmbiguousForEveryMutatingOpNotJustSubmit() {
+        // An interrupted wait proves nothing about the request already on the wire;
+        // mapping it to plain GatewayException would re-arm DRAFT and invite a
+        // duplicate submit (advisor catch on the pre-PR review). The same reasoning
+        // covers approve/reject/information verbatim, and the FIRST broadening of
+        // MUTATING_OPS missed the literal in bounded()'s interrupt branch, so an
+        // interrupted approve still read as definitive: the panel hands the state back
+        // and re-offers the action to a partner who may already have been answered
+        // (#17 QA round 2). Covering only submit is what let that survive a round.
         //
         // The worker is HELD until the assertion has run, because a pending interrupt
         // is only observable while the task is still in flight: Future.get() on an
@@ -475,30 +485,56 @@ class SdkTsanetGatewayTest {
         // flag still set). Without the latch this raced the virtual thread and passed
         // or failed on scheduling: green on macOS, red under CI load, which is how it
         // reached main on the day the sdk job first actually ran.
-        CountDownLatch releaseCreate = new CountDownLatch(1);
-        forms.onFetch = () -> formWithField(88);
-        collaborations.onCreate = form -> {
+        CountDownLatch release = new CountDownLatch(1);
+        Runnable hold = () -> {
             try {
-                releaseCreate.await();
+                release.await();
             } catch (InterruptedException e) {
                 // bounded()'s future.cancel(true) lands here; keep the flag honest.
                 Thread.currentThread().interrupt();
             }
+        };
+        forms.onFetch = () -> formWithField(88);
+        collaborations.onCreate = form -> {
+            hold.run();
             return status("case-int", "TSA-INT", true);
         };
+        caseResponses.onRespond = hold;
+
         SdkTsanetGateway gateway = gateway(1500, 4000);
-        Thread.currentThread().interrupt();
+        org.tsanet.connector.tsanet.dto.EngineerIdentity engineer =
+                new org.tsanet.connector.tsanet.dto.EngineerIdentity(
+                        "Dana Agent", "dana@member.example", "+1 555 0100");
+        LinkedHashMap<String, Executable> invocations = new LinkedHashMap<>();
+        invocations.put("submit", () -> gateway.submit(draft("case-int", Map.of("88", "SN"))));
+        invocations.put("approve", () -> gateway.approve("tok-a", engineer, "121556608", "next steps"));
+        invocations.put("reject", () -> gateway.reject("tok-r", engineer, "not our product"));
+        invocations.put("information", () -> gateway.requestInformation("tok-i", engineer, "which array?"));
+
+        // Read against the REAL set, not a copy: adding a fifth mutating op without an
+        // interrupt probe fails here instead of shipping the next unguarded literal.
+        assertEquals(SdkTsanetGateway.MUTATING_OPS, invocations.keySet(),
+                "every op in MUTATING_OPS needs an interrupt probe; add the new op's invocation here");
+
         try {
-            GatewayTimeoutException thrown = assertThrows(GatewayTimeoutException.class,
-                    () -> gateway.submit(draft("case-int", Map.of("88", "SN"))));
-            // Both the interrupt path and the 4s deadline throw this same type, so
-            // assert the REASON, not just the class: a held worker would otherwise let
-            // this pass by timing out, proving nothing about interrupt handling.
-            assertTrue(thrown.getMessage().contains("interrupted"),
-                    "must be the interrupt path, not the deadline path: " + thrown.getMessage());
+            for (Map.Entry<String, Executable> entry : invocations.entrySet()) {
+                String op = entry.getKey();
+                Thread.currentThread().interrupt();
+                GatewayTimeoutException thrown = assertThrows(GatewayTimeoutException.class,
+                        entry.getValue(), op + " must be ambiguous when interrupted");
+                // Both the interrupt path and the deadline throw this same type, so
+                // assert the REASON, not just the class: a held worker would otherwise
+                // let this pass by timing out, proving nothing about interrupt handling.
+                assertTrue(thrown.getMessage().contains("interrupted"),
+                        op + " must be the interrupt path, not the deadline path: " + thrown.getMessage());
+                assertTrue(thrown.getMessage().contains(op),
+                        op + " must name itself in the message, not report as another op: "
+                                + thrown.getMessage());
+                assertTrue(Thread.interrupted(),
+                        op + ": the interrupt flag must be restored, then cleared for the next op");
+            }
         } finally {
-            releaseCreate.countDown();
-            assertTrue(Thread.interrupted(), "the interrupt flag must be restored, then cleared for the suite");
+            release.countDown();
         }
     }
 
