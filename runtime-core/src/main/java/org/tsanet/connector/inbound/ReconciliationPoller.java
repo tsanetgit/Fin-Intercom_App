@@ -1,6 +1,5 @@
 package org.tsanet.connector.inbound;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -63,7 +62,14 @@ public class ReconciliationPoller {
     private final PollerStateStore state;
     private final InboundProperties properties;
 
-    private int consecutiveFailures;
+    /**
+     * Volatile because the accessor below is public: the counter is only ever WRITTEN
+     * from the scheduler thread (fixedDelay guarantees no overlapping cycle), but a
+     * health surface reading it from another thread has no visibility guarantee without
+     * this. One keyword removes the hazard; a comment saying "only read from the
+     * scheduler thread" would be a rule nothing enforces.
+     */
+    private volatile int consecutiveFailures;
 
     public ReconciliationPoller(TsanetGateway tsanet, InboundRequestHandler handler,
             SubmissionLinkTable links, PollerStateStore state, InboundProperties properties) {
@@ -211,10 +217,5 @@ public class ReconciliationPoller {
             return current;
         }
         return current == null || at.isAfter(current) ? at : current;
-    }
-
-    /** Visible for the configuration's log line. */
-    static Duration defaultLookback() {
-        return Duration.ofHours(24);
     }
 }
