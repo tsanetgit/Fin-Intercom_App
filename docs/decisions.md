@@ -667,3 +667,85 @@ duplicate the work and fight over the mark.
 
 Out of scope and deliberately unclaimed: status sync, notes, and closure. This slice
 recovers missing tickets and nothing else.
+
+## D17. Case status to ticket state: the mapping, and the two statuses we refuse to map
+
+Promoted from the Phase 0 spike, where it lived only as a note. Nothing in the code
+mapped a Connect status onto an Intercom ticket state — `CaseState` is deliberately the
+connector's own view of *our* response, not a mirror of the lifecycle — so closure and
+status sync had no agreed target to write to.
+
+### The mapping
+
+| Connect `status` | Intercom ticket state | Why |
+|---|---|---|
+| `OPEN` | **Submitted** | The partner asked; nobody here has answered yet. |
+| `ACCEPTED` | **In progress** | We took it. |
+| `INFORMATION` | **Waiting on customer** | We asked the partner for more and are blocked on them. |
+| `REJECTED` | **Resolved** | Terminal for us. |
+| `CLOSED` | **Resolved** | Terminal. |
+
+**"Waiting on customer" is Intercom's vocabulary, not ours, and its external label reads
+"Waiting on you".** On a Back-office ticket that text is not partner-visible, so the
+mismatch is cosmetic today — but it stops being cosmetic if these tickets ever gain a
+customer-facing surface. Renaming the state in the workspace is the fix, not remapping.
+
+**Two terminal statuses collapse onto one state.** `REJECTED` and `CLOSED` are both
+Resolved, so the ticket state alone cannot distinguish "we declined" from "it finished".
+The distinction has to live on a ticket attribute; anything reading only the state will
+conflate them.
+
+### Deliberately unmapped
+
+- **`PENDINGACTION`** — undocumented in BOTH contracts, verified rather than assumed: it
+  is a bare enum member in `third_party/connect-api/openapi.yaml` with no description
+  (the transport contract), and a GitBook RAG search returns zero results (the business
+  contract). We cannot map a status nobody has defined. **Open question for TSANet.**
+- **`UNKNOWN`** — an unrecognised wire value by construction, so mapping it would be
+  guessing at exactly the moment the wire has drifted.
+
+For both: **the connector must not move the ticket state.** Leaving the state stale is
+visibly wrong and recoverable; moving it to a guessed value is invisibly wrong. Same
+discipline as `direction()` returning UNKNOWN rather than picking.
+
+### Mechanism, verified live 2026-08-07 against the dev workspace
+
+**Read and write are asymmetric, like `testSubmission`/`testCase` before them.**
+
+- **Read**: a ticket carries `ticket_state` as a plain STRING (`"submitted"`), plus
+  `ticket_state_internal_label`, `ticket_state_external_label`, and an `open` boolean.
+- **Write**: `PUT /tickets/{id}` requires `ticket_state_id` — a numeric id, not the
+  string it reads back. Nothing lets you set the state by name.
+
+**The ids are per-workspace, and enumerating them is a trap.** For this dev workspace's
+"TSANet Collaboration" type (4561712):
+
+```
+Submitted            9619796
+In progress          9619797
+Waiting on customer  9619798
+Resolved             9619799
+```
+
+Those came back **only under `Intercom-Version: Unstable`**. Versions 2.8, 2.9, 2.10 and
+2.11 all omit `ticket_states` from the ticket-type object, and `GET /ticket_states`
+returns zero rows on every version tried. So the sole route found to the ids an
+implementation needs is an API version Intercom explicitly labels unstable.
+
+Consequences for whoever implements status sync:
+
+1. **Resolve the ids at configuration time, not per request.** They are per-workspace, so
+   the pilot's ids are not these, and a pinned constant would silently write the wrong
+   state in another workspace — the same per-workspace trap as
+   `collaboration-ticket-type-id`.
+2. **Do not put `Intercom-Version: Unstable` in the runtime.** Obtain the ids out of band
+   (this call, or the admin UI) and configure them. An unstable version in a live request
+   path is a dependency on something with no compatibility promise.
+3. **Verify the effect (D3).** These writes are exactly where a silent-200 would hide.
+
+### Scope
+
+One direction only: Connect status to ticket state. The reverse — an agent resolving the
+ticket closing the partner's case — is the outbound half of closure and needs its own
+decision about which Intercom state transitions are meant to propagate.
+
