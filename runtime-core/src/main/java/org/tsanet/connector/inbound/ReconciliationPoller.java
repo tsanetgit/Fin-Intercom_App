@@ -174,12 +174,13 @@ public class ReconciliationPoller {
             // advance past a case whose create then failed and released the claim —
             // producing exactly the permanent loss D16 exists to prevent, by way of the
             // invariant it forbids (#22 QA).
-            if (links.byToken(c.token()).map(SubmissionLink::ticketAnchored).orElse(false)) {
+            Optional<SubmissionLink> after = links.byToken(c.token());
+            if (after.map(SubmissionLink::ticketAnchored).orElse(false)) {
                 created++;
                 log.info("tsanet_audit event=reconcile_recovered token={} partner={}",
                         c.token(), c.partnerCompany());
                 high = newest(high, c);
-            } else if (links.byToken(c.token()).isPresent()) {
+            } else if (after.isPresent()) {
                 // Claimed by someone else mid-cycle. In flight, so hold the cursor
                 // without calling it a failure.
                 inFlight++;
@@ -197,17 +198,28 @@ public class ReconciliationPoller {
             }
         }
 
-        if (failed > 0 || inFlight > 0) {
-            // in-flight is not an error, but it holds the mark for the same reason a
-            // failure does: the outcome is not yet known, and advancing past an unknown
-            // outcome is how a case is lost.
-            if (failed > 0) {
-                consecutiveFailures++;
-            }
+        if (failed > 0) {
+            consecutiveFailures++;
             log.error("tsanet_audit event=reconcile_cycle_dirty listed={} created={} skipped={}"
                             + " in_flight={} failed={} cursor_held={} consecutive={}",
                     cases.size(), created, alreadyLinked, inFlight, failed, cursor,
                     consecutiveFailures);
+            return;
+        }
+        if (inFlight > 0) {
+            // A HOLD, not a failure, and it gets its own event at warn rather than
+            // sharing the dirty-cycle line. The dirty line prints `consecutive=`, which
+            // this branch never touches — reporting a failure counter for something that
+            // is not a failure is the kind of mismatch that gets alerted on and then
+            // ignored. D16 says "not a failure, no error noise"; this is what makes the
+            // code say it too (#22 QA round 2).
+            //
+            // NOTE: an orphaned claim (a crash between record() and anchor()) is
+            // permanent, so this branch then repeats every cycle and the cursor never
+            // advances. Loud, bounded, and recoverable by hand — see D16.
+            log.warn("tsanet_audit event=reconcile_cycle_held listed={} created={} skipped={}"
+                            + " in_flight={} cursor_held={}",
+                    cases.size(), created, alreadyLinked, inFlight, cursor);
             return;
         }
 

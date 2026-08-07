@@ -158,7 +158,7 @@ class ReconciliationPollerTest {
         InboundProperties off = new InboundProperties(TYPE, false, null, null);
         new ReconciliationPoller(recording,
                 new InboundRequestHandler(recording, intercom, links, off), links, state, off).cycle();
-        assertTrue(recording.calls == 0, "a disabled poller must not call the API at all");
+        assertEquals(0, recording.calls, "a disabled poller must not call the API at all");
     }
 
     @Test
@@ -176,11 +176,17 @@ class ReconciliationPollerTest {
                 null, "Test sdk2", null, true, null, Instant.now()));   // no ticketId = claim only
         tsanet.seedInbound(inbound("inbound-claimed", at));
 
-        poller(TYPE).cycle();
+        ReconciliationPoller p = poller(TYPE);
+        p.cycle();
 
         assertTrue(state.cursor().isEmpty(),
                 "an unanchored claim is an unknown outcome; the cursor must not pass it");
         assertEquals(0, intercom.createCalls(), "an in-flight claim is not this cycle's work");
+        // The CLASSIFICATION, not just the hold. A regression that counted the bare claim
+        // as a failure would still hold the cursor and pass everything above, while
+        // turning an ordinary race into an error-level alert every cycle (#22 QA round 2).
+        assertEquals(0, p.consecutiveFailures(),
+                "an in-flight claim is a hold, not a failure — the counter must not move");
     }
 
     @Test
@@ -241,6 +247,62 @@ class ReconciliationPollerTest {
                 .cycle();
         assertFalse(recording.asked.isBefore(Instant.now().minus(Duration.ofHours(25))),
                 "a first run must ask for the bounded lookback, not the beginning of time");
+    }
+
+    @Test
+    void aClaimAppearingDURINGTheCycleAlsoHoldsTheCursor() {
+        // The interleaving QA's original blocker described, and the branch a probe found
+        // untested: the prefilter sees NOTHING, so the poller calls handle(); the live
+        // drain wins the record() race meanwhile; handle() returns normally via
+        // inbound_already_claimed; and the outcome check then sees an UNANCHORED row.
+        //
+        // Counting that as created is what would advance the cursor past a case whose
+        // create is still in flight — and if it then fails and releases, the case is
+        // outside the window with no link. Distinct from aClaimWithNoTicketHoldsTheCursor,
+        // which exercises the PREFILTER because its claim exists before the cycle starts.
+        Instant at = Instant.now().minus(Duration.ofMinutes(5));
+        SubmissionLink claim = new SubmissionLink("inbound-raced", "inbound:inbound-raced",
+                null, null, null, "Test sdk2", null, true, null, Instant.now());
+        SubmissionLinkTable racing = new RacingLinkTable(links, "inbound-raced", claim);
+        tsanet.seedInbound(inbound("inbound-raced", at));
+
+        InboundProperties props = new InboundProperties(TYPE, true,
+                Duration.ofHours(24), Duration.ofSeconds(120));
+        ReconciliationPoller p = new ReconciliationPoller(tsanet,
+                new InboundRequestHandler(tsanet, intercom, racing, props), racing, state, props);
+        p.cycle();
+
+        assertTrue(state.cursor().isEmpty(),
+                "a claim that appeared mid-cycle is an unknown outcome; the cursor must hold");
+        assertEquals(0, p.consecutiveFailures(), "losing the record() race is not a failure");
+    }
+
+    /**
+     * Answers "absent" to the prefilter and then the claim to the outcome check, which is
+     * exactly what the live drain winning the race looks like from the poller's side.
+     */
+    private static final class RacingLinkTable extends DelegatingLinkTable {
+        private final String token;
+        private final SubmissionLink claim;
+        private boolean asked;
+
+        RacingLinkTable(SubmissionLinkTable delegate, String token, SubmissionLink claim) {
+            super(delegate);
+            this.token = token;
+            this.claim = claim;
+        }
+
+        @Override
+        public Optional<SubmissionLink> byToken(String t) {
+            if (!token.equals(t)) {
+                return super.byToken(t);
+            }
+            if (!asked) {
+                asked = true;
+                return Optional.empty();   // prefilter: nothing here yet
+            }
+            return Optional.of(claim);     // outcome check: the drain got there first
+        }
     }
 
     /** Captures the cursor the poller actually asks for. */

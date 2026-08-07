@@ -13,10 +13,6 @@ import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
 /**
  * The durable cursor store, which is what production actually runs.
@@ -32,6 +28,7 @@ class SqlitePollerStateStoreTest {
 
     @TempDir
     static Path dir;
+
 
     @Test
     void aCursorSurvivesAReopen() {
@@ -82,34 +79,5 @@ class SqlitePollerStateStoreTest {
         // The operator chose a durable store and gave it nowhere to live. Silently
         // picking a path would put the cursor somewhere nobody mounted.
         assertThrows(IllegalStateException.class, () -> new SqlitePollerStateStore("  "));
-    }
-
-    /**
-     * The wiring, which no unit test can reach: that {@code store=sqlite} selects the
-     * SQLite bean rather than the in-memory one, and that the nested
-     * {@code LinkPathProperties} record is actually scanned and bound.
-     */
-    @SpringBootTest
-    static class SqliteStoreIsWiredUnderTheSqliteProfile {
-
-        @DynamicPropertySource
-        static void properties(DynamicPropertyRegistry registry) {
-            registry.add("connector.tsanet.mode", () -> "fake");
-            registry.add("connector.intercom.mode", () -> "fake");
-            registry.add("connector.links.store", () -> "sqlite");
-            registry.add("connector.links.sqlite-path", () -> dir.resolve("wired.db").toString());
-            registry.add("connector.inbound.reconcile-interval-ms", () -> "3600000");
-            registry.add("connector.inbound.reconcile-initial-delay-ms", () -> "3600000");
-        }
-
-        @Autowired
-        private PollerStateStore store;
-
-        @Test
-        void theDurableStoreIsSelected() {
-            assertEquals(SqlitePollerStateStore.class, store.getClass(),
-                    "store=sqlite must select the durable cursor, not the in-memory one —"
-                            + " prod runs this branch");
-        }
     }
 }

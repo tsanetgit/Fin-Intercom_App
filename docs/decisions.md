@@ -621,8 +621,19 @@ the `record()` race to the live drain. Counting that as success let the cursor a
 past a case whose create then failed and released the claim — leaving it with no link,
 outside the window, unrecoverable: the exact loss this entry forbids, produced by the
 rule meant to prevent it (#22 QA). An unanchored row is now read as IN FLIGHT: not a
-failure, no error noise, but the cursor holds, because an unknown outcome is not one to
-advance past.
+failure, so it does not touch the failure counter and does not use the dirty-cycle line —
+it emits its own `reconcile_cycle_held` at warn — but the cursor holds, because an unknown
+outcome is not one to advance past.
+
+**An orphaned claim therefore wedges the cursor until someone intervenes.** A crash
+between `record()` and `anchor()` leaves an unanchored row that no longer has a thread
+behind it, and every subsequent cycle reads it as in-flight and holds. That is
+deliberately preferred to the alternative — advancing past it is the silent permanent loss
+this entry exists to prevent — and it is loud rather than silent: a `reconcile_cycle_held`
+line every cycle, naming the token. But it does NOT self-heal, and `consecutiveFailures`
+stays at zero because nothing failed, so an alert keyed on that counter will not fire.
+Claims have no expiry today; an age-based reclaim is the follow-up
+(`tsanetgit/Fin-Intercom_App#26`).
 
 **The cursor is persisted BEFORE the cycle is declared healthy.** The store throws on a
 SQL failure by design, refusing to hide a broken volume (D12). The first version reset
