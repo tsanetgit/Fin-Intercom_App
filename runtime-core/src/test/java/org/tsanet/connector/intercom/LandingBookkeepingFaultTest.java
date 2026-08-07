@@ -48,12 +48,12 @@ class LandingBookkeepingFaultTest {
         volatile boolean throwOnNextRecord;
 
         @Override
-        public void record(SubmissionLink link) {
+        public boolean record(SubmissionLink link) {
             if (throwOnNextRecord) {
                 throwOnNextRecord = false;
                 throw new IllegalStateException("injected bookkeeping failure");
             }
-            super.record(link);
+            return super.record(link);
         }
     }
 

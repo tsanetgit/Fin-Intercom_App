@@ -26,6 +26,14 @@ connector:
     access-token: ${INTERCOM_ACCESS_TOKEN:${INTERCOM_DEV_ACCESS_TOKEN:}}
     admin-id: ${INTERCOM_ADMIN_ID:}   # blank = resolved once via GET /me at wiring
     api-base-url: https://api.intercom.io
+  # memory = volatile map table (dev/test; refused under the prod profile); sqlite =
+  # durable file store. Links are the only route home for an open case, so a restart on
+  # the memory store orphans every one of them (docs/decisions.md D10, D12). The file
+  # must sit on storage that outlives the container - the boot log prints its absolute
+  # path so a mis-mounted volume is visible rather than silent.
+  links:
+    store: ${CONNECTOR_LINKS_STORE:memory}
+    sqlite-path: ${CONNECTOR_LINKS_SQLITE_PATH:data/links.db}
   # Empty secrets fail closed (401) on the signed endpoints; /healthz stays open.
   intercom-client-secret: ${INTERCOM_DEV_CLIENT_SECRET:}
   tsanet-webhook-secret: ${TSANET_WEBHOOK_SECRET:${TSANET_BETA_WEBHOOK_SECRET:}}
