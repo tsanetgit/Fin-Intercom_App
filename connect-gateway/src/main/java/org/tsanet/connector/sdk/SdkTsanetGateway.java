@@ -41,6 +41,7 @@ import org.tsanet.connector.tsanet.GatewayException;
 import org.tsanet.connector.tsanet.GatewayTimeoutException;
 import org.tsanet.connector.tsanet.TsanetGateway;
 import org.tsanet.connector.tsanet.dto.FormField;
+import org.tsanet.connector.tsanet.dto.InboundCase;
 import org.tsanet.connector.tsanet.dto.PartnerHit;
 import org.tsanet.connector.tsanet.dto.ProcessForm;
 import org.tsanet.connector.tsanet.dto.SubmissionDraft;
@@ -407,6 +408,73 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
     }
 
     /** Runs {@code call} (with one-shot 401 recovery) under a hard wall-clock deadline. */
+    @Override
+    public Optional<InboundCase> fetchByToken(String token) {
+        if (token == null || token.isBlank()) {
+            return Optional.empty();
+        }
+        CollaborationRequestStatusDTO dto;
+        try {
+            dto = bounded("fetch", config.readDeadlineMillis(),
+                    () -> collaborations.getCollaborationRequestByToken(token, Boolean.FALSE));
+        } catch (GatewayException e) {
+            // A parsed 404 is the API answering "no such case", which is a definitive
+            // result a handler acts on. Everything else keeps its taxonomy: an
+            // ambiguous read must not read as absence, or a handler treats a live
+            // partner case as one that never existed.
+            if (e.getMessage() != null && e.getMessage().contains("HTTP 404")) {
+                return Optional.empty();
+            }
+            throw e;
+        }
+        if (dto == null || dto.getToken() == null || dto.getToken().isBlank()) {
+            // Same rule as find's token-less row (D3): a case we cannot key is not a
+            // case we can route, and reporting absence would invite a second ticket.
+            log.warn("tsanet_gateway_tokenless_row op=fetch");
+            throw new GatewayException("Connect returned the case without a token (fetch)");
+        }
+        return Optional.of(new InboundCase(
+                dto.getToken(),
+                direction(dto.getDirection()),
+                status(dto.getStatus()),
+                // The partner is whoever is on the other end: for a case they sent us,
+                // that is the submitting company.
+                dto.getSubmitCompanyName(),
+                dto.getSummary(),
+                dto.getDescription(),
+                dto.getRespondBy() == null ? null : dto.getRespondBy().toString(),
+                dto.getPriority() == null ? null : dto.getPriority().toString(),
+                // testCase read, testSubmission written: the fields are deliberately
+                // asymmetric and reading the wrong one treats a test case as real.
+                Boolean.TRUE.equals(dto.getTestCase())));
+    }
+
+    /** Unrecognised wire values map to UNKNOWN rather than a guess: direction decides
+     * whether a ticket is created at all, so a wrong guess creates a wrong ticket. */
+    private static InboundCase.Direction direction(Object wire) {
+        if (wire == null) {
+            return InboundCase.Direction.UNKNOWN;
+        }
+        try {
+            return InboundCase.Direction.valueOf(wire.toString());
+        } catch (IllegalArgumentException unknown) {
+            log.warn("tsanet_gateway_unknown_direction value={}", wire);
+            return InboundCase.Direction.UNKNOWN;
+        }
+    }
+
+    private static InboundCase.Status status(Object wire) {
+        if (wire == null) {
+            return InboundCase.Status.UNKNOWN;
+        }
+        try {
+            return InboundCase.Status.valueOf(wire.toString());
+        } catch (IllegalArgumentException unknown) {
+            log.warn("tsanet_gateway_unknown_status value={}", wire);
+            return InboundCase.Status.UNKNOWN;
+        }
+    }
+
     private <T> T bounded(String op, long deadlineMillis, Callable<T> call) {
         Future<T> future = executor.submit(() -> callOnce(call));
         try {

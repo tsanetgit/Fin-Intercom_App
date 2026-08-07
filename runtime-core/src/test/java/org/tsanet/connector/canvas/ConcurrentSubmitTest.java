@@ -60,6 +60,11 @@ class ConcurrentSubmitTest {
 
     /** Gateway whose submit parks until released, making the race window explicit. */
     static final class BlockingGateway implements TsanetGateway {
+        @Override
+        public java.util.Optional<org.tsanet.connector.tsanet.dto.InboundCase> fetchByToken(String token) {
+            return java.util.Optional.empty(); // not exercised by this test's flow
+        }
+
 
         volatile CountDownLatch entered = new CountDownLatch(1);
         volatile CountDownLatch release = new CountDownLatch(1);

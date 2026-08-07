@@ -56,6 +56,11 @@ class GatewayFaultRecoveryTest {
 
     /** First submit throws a plain RuntimeException (outside the taxonomy); later ones land. */
     static final class FaultyGateway implements TsanetGateway {
+        @Override
+        public java.util.Optional<org.tsanet.connector.tsanet.dto.InboundCase> fetchByToken(String token) {
+            return java.util.Optional.empty(); // not exercised by this test's flow
+        }
+
 
         final AtomicInteger submits = new AtomicInteger();
         private final Map<String, SubmissionResult> store = new ConcurrentHashMap<>();
