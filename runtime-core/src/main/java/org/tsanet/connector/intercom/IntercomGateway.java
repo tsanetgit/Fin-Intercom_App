@@ -50,6 +50,30 @@ public interface IntercomGateway {
     record CreatedTicket(String id, String number) {
     }
 
+    /**
+     * Moves a ticket to a state, by state id, and VERIFIES it landed.
+     *
+     * <p>Read and write are asymmetric here (docs/decisions.md D17): a ticket reads its
+     * state back as a plain string, but setting one requires the numeric
+     * {@code ticket_state_id}. There is no set-by-name.
+     *
+     * <p>The verification is not optional. This is the exact surface D3 was written for —
+     * {@code PUT /tickets/&#123;id&#125;} answers 200 while silently ignoring a field it does not
+     * recognise, so a bare success here would let a state that never moved report as
+     * moved, and the ticket would sit open with the partner's case closed.
+     *
+     * <p>The verification asserts the ticket is CLOSED (its {@code open} flag is false),
+     * not that it carries one particular state name. Every state this connector writes
+     * is terminal, and asserting on the flag keeps the check working when a workspace
+     * renames its states — which D17 records that it may, since state ids and labels are
+     * per-workspace. An implementation that needs to write a non-terminal state must
+     * strengthen this, because the current check would pass one.
+     *
+     * @throws IntercomException if the write fails, or if the read-back shows the ticket
+     *     is still open
+     */
+    void moveTicketState(String ticketId, String stateId);
+
     /** Cheap credential/reachability probe (GET /me). */
     boolean healthy();
 

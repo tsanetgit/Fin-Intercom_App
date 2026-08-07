@@ -18,5 +18,11 @@ public enum CaseState {
     ACCEPTED,
     REJECTED,
     /** We asked the partner for more information and are waiting on them. */
-    INFO_REQUESTED
+    INFO_REQUESTED,
+    /**
+     * The PARTNER closed the case. Terminal, and unlike the others it is not something
+     * an agent here did — it is a fact mirrored inbound, which is why nothing in the
+     * panel can produce it.
+     */
+    CLOSED
 }

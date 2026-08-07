@@ -25,13 +25,21 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *     unspecified inclusive/exclusive boundary of the filter. Overlap is free: a
  *     re-listed case is skipped by the link-table prefilter. Missing one is not.</li>
  * </ul>
+ *
+ * <p>{@code resolvedStateId} is the Intercom ticket-state id a closed partner case moves
+ * to (docs/decisions.md D17). Like the ticket type it is PER-WORKSPACE and has no
+ * default — and unlike most ids it cannot even be looked up conveniently: the only way
+ * found to enumerate state ids is {@code Intercom-Version: Unstable}, so it is resolved
+ * out of band and configured. Unset means closure REFUSES rather than guessing, because
+ * a wrong id may not 404 — it may name a different state that happens to exist.
  */
 @ConfigurationProperties(prefix = "connector.inbound")
 public record InboundProperties(
         String collaborationTicketTypeId,
         Boolean reconcileEnabled,
         Duration reconcileLookback,
-        Duration reconcileOverlap) {
+        Duration reconcileOverlap,
+        String resolvedStateId) {
 
     public InboundProperties {
         // Defaulted HERE rather than in an accessor, so the record component can keep
@@ -62,7 +70,13 @@ public record InboundProperties(
      * constructor found". Caught by the existing context tests, not by this file.
      */
     public static InboundProperties ofTicketType(String collaborationTicketTypeId) {
-        return new InboundProperties(collaborationTicketTypeId, null, null, null);
+        return new InboundProperties(collaborationTicketTypeId, null, null, null, null);
+    }
+
+    /** Ticket type plus the resolved-state id, for closure-flow callers. */
+    public static InboundProperties ofTicketTypeAndResolvedState(String collaborationTicketTypeId,
+            String resolvedStateId) {
+        return new InboundProperties(collaborationTicketTypeId, null, null, null, resolvedStateId);
     }
 
 }

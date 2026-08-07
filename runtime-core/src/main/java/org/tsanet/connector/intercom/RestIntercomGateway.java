@@ -119,6 +119,47 @@ public class RestIntercomGateway implements IntercomGateway {
         }
     }
 
+    @Override
+    public void moveTicketState(String ticketId, String stateId) {
+        if (ticketId == null || ticketId.isBlank() || stateId == null || stateId.isBlank()) {
+            throw new IntercomException("moveTicketState needs both a ticket id and a state id");
+        }
+        try {
+            // ticket_state_id, not the string the ticket reads back with: there is no
+            // set-by-name (D17). A wrong key here is the classic silent 200.
+            http.put(baseUrl + "/tickets/" + ticketId, Map.of("ticket_state_id", stateId));
+        } catch (RestClientResponseException e) {
+            throw fail("state", e);
+        }
+        verifyStateLanded(ticketId, stateId);
+    }
+
+    /**
+     * D3 applied to the state write. The read-back compares the ticket's own
+     * {@code ticket_state} STRING against the internal label of the state we asked for,
+     * because the write takes an id and the read gives a name — there is no single field
+     * that answers both.
+     */
+    private void verifyStateLanded(String ticketId, String stateId) {
+        Map<?, ?> ticket;
+        try {
+            ticket = http.getForObject(baseUrl + "/tickets/" + ticketId, Map.class);
+        } catch (RestClientResponseException e) {
+            throw fail("state read-back", e);
+        }
+        Object open = ticket == null ? null : ticket.get("open");
+        Object state = ticket == null ? null : ticket.get("ticket_state");
+        // The only state this connector ever writes is a terminal one, and every
+        // terminal state closes the ticket. Asserting on `open` rather than matching a
+        // label string keeps the check working when a workspace renames its states —
+        // which it may, since D17 records that these ids and labels are per-workspace.
+        if (!Boolean.FALSE.equals(open)) {
+            throw new IntercomException("ticket " + ticketId + " did not move to state "
+                    + stateId + " (still open=" + open + ", state=" + state
+                    + "); check connector.inbound.resolved-state-id belongs to this workspace");
+        }
+    }
+
     private void put(String ticketId, Map<String, Object> attrs) {
         http.put(baseUrl + "/tickets/" + ticketId, Map.of("ticket_attributes", attrs));
     }

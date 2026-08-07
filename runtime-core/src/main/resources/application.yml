@@ -43,6 +43,14 @@ connector:
     # (creation sub-second, the server's SLA sweep whole-second) and the filter boundary
     # is unspecified; a re-listed case is free, a missed one is not.
     reconcile-overlap: ${CONNECTOR_RECONCILE_OVERLAP:120s}
+    # The ticket state a partner-closed case moves to (D17). PER WORKSPACE, like the
+    # ticket type, and NOT conveniently discoverable: state ids are only enumerable
+    # under `Intercom-Version: Unstable`, so resolve it out of band and set it here.
+    # Unset means inbound closure is refused rather than guessed — a wrong id may move
+    # the ticket to some unrelated state instead of failing.
+    # Dev workspace, type 4561712: Submitted 9619796, In progress 9619797,
+    # Waiting on customer 9619798, Resolved 9619799.
+    resolved-state-id: ${INTERCOM_RESOLVED_STATE_ID:}
 
   intercom:
     mode: fake

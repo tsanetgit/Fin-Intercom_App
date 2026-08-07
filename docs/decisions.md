@@ -749,3 +749,52 @@ One direction only: Connect status to ticket state. The reverse — an agent res
 ticket closing the partner's case — is the outbound half of closure and needs its own
 decision about which Intercom state transitions are meant to propagate.
 
+## D18. Inbound closure: mirror the partner's close, and do not pretend to recover a missed one
+
+The inbound half of "closure from either side", built on D17's mapping. A
+`collaboration-request.closed` CloudEvent resolves the ticket that mirrors the case.
+
+**The harm it removes is specific:** before this, a partner closing a case left the
+Intercom ticket open forever with the panel still offering Accept and Decline, so an
+agent could answer a partner who had gone.
+
+**Platform first, then the record — the opposite order to D15**, and the difference is
+the point. A response flow moves the recorded state BEFORE calling the partner, because
+that state is the guard against answering twice. Closure sends nothing to anyone; it
+mirrors a fact. So the risk inverts: recording CLOSED before the ticket resolves would
+tell an agent the case is closed while the ticket sits open in their queue. A failed
+resolve therefore records nothing, which is what leaves a redelivery able to fix it.
+
+**Compare-and-set from whatever state holds, not from PENDING.** A partner can close a
+case we already accepted, so the panel's `PENDING -> X` shape does not apply. Closure
+reads the current state and moves from it, retrying once if an agent won the race
+in between. If it keeps losing, the ticket is still resolved — which is what the agent
+sees — and only our record of why is stale, so it logs rather than looping.
+
+**`CaseState.CLOSED` is the first state no agent action can produce.** The panel renders
+it as "The partner closed this case", distinct from "answered", because an agent who did
+not do this would otherwise wonder why their options vanished.
+
+**The resolved-state id is configuration with no default, for the reason D17 gives:**
+state ids are per-workspace and only enumerable under `Intercom-Version: Unstable`.
+Unset REFUSES. A guessed id may not 404 — it may name a different state that exists in
+that workspace — so the failure would be a ticket moved somewhere wrong rather than an
+error.
+
+**What this does NOT do, stated because the temptation is to imply otherwise.** Nothing
+re-drives a MISSED closure. The reconciliation poller (D16) claims
+`collaboration-request.created` only, so a closure event lost in transit leaves the
+ticket open with no second chance — exactly the gap inbound create had before the poller
+existed. Extending the poller to reconcile STATUS is the status-sync box on
+`tsanetgit/Member-Integrations#51`, and it is blocked on
+`tsanetgit/Fin-Intercom_App#24`. This slice recovers nothing; it only handles what
+arrives.
+
+**Outbound closure is not built.** An agent resolving the ticket does not close the
+partner's case. That needs a decision this repo has not taken: which Intercom state
+transitions are meant to propagate, whether resolving a never-accepted case is valid to
+the API at all, and what to do about tickets resolved for reasons unrelated to the
+collaboration. The `/closure` endpoint documents only 200/400, so an invalid transition
+is not distinguishable from any other bad request — which makes guessing the policy
+expensive to get wrong.
+

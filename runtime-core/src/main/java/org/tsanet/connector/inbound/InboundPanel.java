@@ -119,11 +119,16 @@ public class InboundPanel {
             components.add(CanvasKit.button(ACCEPT, "Accept"));
             components.add(CanvasKit.button(INFO, "Request information"));
             components.add(CanvasKit.button(REJECT, "Decline"));
+        } else if (state == CaseState.CLOSED) {
+            // Closed by the PARTNER, so there is nothing to answer and nobody to answer
+            // it to. Distinguished from "answered" because the agent did not do this and
+            // would otherwise wonder why their options vanished.
+            components.add(CanvasKit.muted("The partner closed this case."));
         } else {
             // Answered cases offer nothing: a second response would reach the partner
-            // twice, and notes/closure are later slices.
+            // twice, and notes are a later slice.
             components.add(CanvasKit.muted("This case has been answered."
-                    + " Replies and closure arrive in a later release."));
+                    + " Replies arrive in a later release."));
         }
         return CanvasKit.canvas(components, Map.of());
     }
@@ -262,6 +267,7 @@ public class InboundPanel {
             case ACCEPTED -> "accepted";
             case REJECTED -> "declined";
             case INFO_REQUESTED -> "information requested";
+            case CLOSED -> "closed by the partner";
         };
     }
 
