@@ -126,6 +126,39 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
     }
 
     @Override
+    public boolean releaseClaim(String token) {
+        if (token == null) {
+            return false;
+        }
+        Entry entry = byToken.get(token);
+        if (entry == null) {
+            return false;
+        }
+        SubmissionLink link = entry.link();
+        if (link.ticketAnchored() || link.conversationId() != null) {
+            return false; // anchored: a real route home, never removable
+        }
+        if (!byToken.remove(token, entry)) {
+            return false;
+        }
+        tokenByInternal.remove(link.internalCaseNumber(), token);
+        return true;
+    }
+
+    @Override
+    public void anchor(String token, String ticketId) {
+        if (token == null || ticketId == null) {
+            return;
+        }
+        byToken.computeIfPresent(token, (key, entry) -> {
+            SubmissionLink l = entry.link();
+            return new Entry(new SubmissionLink(l.token(), l.internalCaseNumber(), l.workspaceId(),
+                    l.conversationId(), ticketId, l.partnerDisplay(), l.respondBy(), l.testCase(),
+                    l.submittedBy(), l.submittedAt()), entry.annotation());
+        });
+    }
+
+    @Override
     public int size() {
         return byToken.size();
     }

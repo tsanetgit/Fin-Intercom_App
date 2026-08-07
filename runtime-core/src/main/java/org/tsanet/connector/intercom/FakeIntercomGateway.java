@@ -53,6 +53,36 @@ public class FakeIntercomGateway implements IntercomGateway {
         return partner.contains("intercom-degrade") ? AnnotationOutcome.DEGRADED : AnnotationOutcome.FULL;
     }
 
+    private final Map<String, String> ticketsByToken = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicInteger createCalls =
+            new java.util.concurrent.atomic.AtomicInteger();
+    /** Set to make the next create throw, so the handler's claim-release path is testable. */
+    public volatile boolean failNextCreate;
+
+    @Override
+    public String createCollaborationTicket(InboundTicketRequest request) {
+        createCalls.incrementAndGet();
+        if (failNextCreate) {
+            failNextCreate = false;
+            throw new IntercomException("injected ticket-create failure");
+        }
+        // Deliberately NOT idempotent on the token: the contract puts idempotency in
+        // the caller's claim, and a fake that quietly de-duplicated would hide a
+        // handler that creates twice.
+        String ticketId = "tkt-" + ticketsByToken.size() + "-" + request.token();
+        ticketsByToken.put(request.token(), ticketId);
+        return ticketId;
+    }
+
+    /** How many times a ticket create was attempted — the duplicate-ticket probe. */
+    public int createCalls() {
+        return createCalls.get();
+    }
+
+    public Map<String, String> ticketsByToken() {
+        return Map.copyOf(ticketsByToken);
+    }
+
     @Override
     public boolean healthy() {
         return true;
