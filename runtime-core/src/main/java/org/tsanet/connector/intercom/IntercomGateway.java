@@ -62,8 +62,15 @@ public interface IntercomGateway {
      * recognise, so a bare success here would let a state that never moved report as
      * moved, and the ticket would sit open with the partner's case closed.
      *
+     * <p>The verification asserts the ticket is CLOSED (its {@code open} flag is false),
+     * not that it carries one particular state name. Every state this connector writes
+     * is terminal, and asserting on the flag keeps the check working when a workspace
+     * renames its states — which D17 records that it may, since state ids and labels are
+     * per-workspace. An implementation that needs to write a non-terminal state must
+     * strengthen this, because the current check would pass one.
+     *
      * @throws IntercomException if the write fails, or if the read-back shows the ticket
-     *     is not in the expected state
+     *     is still open
      */
     void moveTicketState(String ticketId, String stateId);
 
