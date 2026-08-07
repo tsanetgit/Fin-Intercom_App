@@ -3,7 +3,6 @@ package org.tsanet.connector.inbound;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.env.Environment;
 
 /**
  * Chooses where the reconciliation cursor lives, following the SAME
@@ -30,7 +29,7 @@ public class PollerStateConfiguration {
 
     @Bean
     @ConditionalOnProperty(name = "connector.links.store", havingValue = "sqlite")
-    PollerStateStore sqlitePollerStateStore(LinkPathProperties props, Environment environment) {
+    PollerStateStore sqlitePollerStateStore(LinkPathProperties props) {
         String path = props.sqlitePath();
         if (path == null || path.isBlank()) {
             // Same message shape as the link table's own refusal: the operator selected

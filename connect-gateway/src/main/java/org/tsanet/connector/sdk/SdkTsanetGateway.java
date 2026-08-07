@@ -520,8 +520,18 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         OffsetDateTime cursor = updatedAfter == null ? null : updatedAfter.atOffset(ZoneOffset.UTC);
         List<CollaborationRequestStatusDTO> body = bounded("reconcile",
                 config.reconcileDeadlineMillis(),
+                // updatedAfter and createdAfter are ADJACENT and both OffsetDateTime, so
+                // a transposition compiles silently and would cursor on the wrong axis —
+                // create-time instead of change-time, which never advances for a case
+                // that is updated but not recreated. Named at the call site because the
+                // compiler cannot help here (#22 QA).
                 () -> collaborations.listCollaborationRequests(
-                        null, CollaborationRequestType.INBOUND, null, cursor, null, Boolean.FALSE));
+                        /* internalCaseNumber */ null,
+                        /* type */ CollaborationRequestType.INBOUND,
+                        /* status */ null,
+                        /* updatedAfter */ cursor,
+                        /* createdAfter */ null,
+                        /* includeRemovedNotes */ Boolean.FALSE));
         if (body == null) {
             return List.of();
         }

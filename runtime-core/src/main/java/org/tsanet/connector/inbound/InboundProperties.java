@@ -29,11 +29,21 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "connector.inbound")
 public record InboundProperties(
         String collaborationTicketTypeId,
-        Boolean reconcileEnabledValue,
+        Boolean reconcileEnabled,
         Duration reconcileLookback,
         Duration reconcileOverlap) {
 
     public InboundProperties {
+        // Defaulted HERE rather than in an accessor, so the record component can keep
+        // the name an operator will actually type. The earlier shape called it
+        // `reconcileEnabledValue` purely to free up the accessor name, which meant
+        // `connector.inbound.reconcile-enabled=false` bound to NOTHING and was silently
+        // ignored — the poller stayed on and the operator had no signal (#22 QA).
+        // Unset means TRUE: someone who never heard of this setting should get the
+        // recovery, not silently lose it. Turning it off has to be typed.
+        if (reconcileEnabled == null) {
+            reconcileEnabled = Boolean.TRUE;
+        }
         if (reconcileLookback == null || reconcileLookback.isNegative() || reconcileLookback.isZero()) {
             reconcileLookback = Duration.ofHours(24);
         }
@@ -55,12 +65,4 @@ public record InboundProperties(
         return new InboundProperties(collaborationTicketTypeId, null, null, null);
     }
 
-    /**
-     * Whether the poller runs. Defaults to TRUE when unset: an operator who never heard
-     * of this setting should get the recovery, not silently lose it. Turning recovery
-     * off has to be a decision someone typed.
-     */
-    public boolean reconcileEnabled() {
-        return reconcileEnabledValue == null || reconcileEnabledValue;
-    }
 }

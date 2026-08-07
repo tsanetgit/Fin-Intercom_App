@@ -3,11 +3,13 @@ package org.tsanet.connector.inbound;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.tsanet.connector.events.InboundEvent;
+import org.tsanet.connector.intercom.SubmissionLink;
 import org.tsanet.connector.intercom.SubmissionLinkTable;
 import org.tsanet.connector.tsanet.TsanetGateway;
 import org.tsanet.connector.tsanet.dto.InboundCase;
@@ -124,17 +126,29 @@ public class ReconciliationPoller {
 
         int created = 0;
         int alreadyLinked = 0;
+        int inFlight = 0;
         int failed = 0;
         Instant high = null;
         for (InboundCase c : cases) {
             if (c.token() == null || c.token().isBlank()) {
                 continue; // the gateway already logged it; unroutable either way
             }
-            if (links.byToken(c.token()).isPresent()) {
-                // The common case by a wide margin: push already handled it. Skipping
-                // here is what makes the overlap window free.
+            Optional<SubmissionLink> existing = links.byToken(c.token());
+            if (existing.map(SubmissionLink::ticketAnchored).orElse(false)) {
+                // The common case by a wide margin: push already handled it and the
+                // ticket exists. Skipping here is what makes the overlap window free.
                 alreadyLinked++;
                 high = newest(high, c);
+                continue;
+            }
+            if (existing.isPresent()) {
+                // A row with NO anchor is a claim in flight, not a finished ticket —
+                // another thread is between record() and anchor() right now. It is not
+                // a failure, so no error noise, but the cursor MUST NOT advance past it:
+                // if that create then fails and releases the claim, the case would fall
+                // outside the window with no link and never be seen again.
+                inFlight++;
+                log.info("tsanet_audit event=reconcile_in_flight token={}", c.token());
                 continue;
             }
             try {
@@ -154,11 +168,22 @@ public class ReconciliationPoller {
             //
             // Found by the test below rather than by reading the handler: the first
             // version of this loop counted a swallowed create failure as success.
-            if (links.byToken(c.token()).isPresent()) {
+            // ANCHORED, not merely present. byToken() is true for a bare claim too, and
+            // this handler returns normally via inbound_already_claimed when it LOSES the
+            // record() race to the live drain. Counting that as success let the cursor
+            // advance past a case whose create then failed and released the claim —
+            // producing exactly the permanent loss D16 exists to prevent, by way of the
+            // invariant it forbids (#22 QA).
+            if (links.byToken(c.token()).map(SubmissionLink::ticketAnchored).orElse(false)) {
                 created++;
                 log.info("tsanet_audit event=reconcile_recovered token={} partner={}",
                         c.token(), c.partnerCompany());
                 high = newest(high, c);
+            } else if (links.byToken(c.token()).isPresent()) {
+                // Claimed by someone else mid-cycle. In flight, so hold the cursor
+                // without calling it a failure.
+                inFlight++;
+                log.info("tsanet_audit event=reconcile_in_flight token={}", c.token());
             } else {
                 // Every case reaching here was INBOUND (filtered server-side and
                 // re-checked), so "still unlinked" is not a legitimate decline — it is a
@@ -172,22 +197,47 @@ public class ReconciliationPoller {
             }
         }
 
-        if (failed > 0) {
-            consecutiveFailures++;
+        if (failed > 0 || inFlight > 0) {
+            // in-flight is not an error, but it holds the mark for the same reason a
+            // failure does: the outcome is not yet known, and advancing past an unknown
+            // outcome is how a case is lost.
+            if (failed > 0) {
+                consecutiveFailures++;
+            }
             log.error("tsanet_audit event=reconcile_cycle_dirty listed={} created={} skipped={}"
-                            + " failed={} cursor_held={} consecutive={}",
-                    cases.size(), created, alreadyLinked, failed, cursor, consecutiveFailures);
+                            + " in_flight={} failed={} cursor_held={} consecutive={}",
+                    cases.size(), created, alreadyLinked, inFlight, failed, cursor,
+                    consecutiveFailures);
             return;
         }
 
-        consecutiveFailures = 0;
+        // PERSIST BEFORE DECLARING SUCCESS. SqlitePollerStateStore.cursor(Instant) throws
+        // on a SQL failure by design — it refuses to hide a broken volume (D12). The
+        // first version reset consecutiveFailures and then persisted OUTSIDE any try, so
+        // on a broken volume every cycle reported a healthy counter, never reached the
+        // clean audit line, and let the exception escape into Spring's scheduler handler
+        // in non-audit format. The store promised loudness and the caller undid it, in
+        // exactly the D12 failure mode this is supposed to cover (#22 QA).
+        //
         // Advance only to what was actually observed. On an empty window there is
         // nothing to advance TO — moving the mark to "now" would step over any case
         // whose updatedAt lands between the query and this line.
         if (high != null) {
-            state.cursor(high);
+            try {
+                state.cursor(high);
+            } catch (RuntimeException e) {
+                consecutiveFailures++;
+                log.error("tsanet_audit event=reconcile_cycle_failed stage=cursor_persist"
+                                + " cursor={} attempted={} consecutive={} reason={}",
+                        cursor, high, consecutiveFailures, e.getMessage());
+                return;
+            }
         }
-        log.info("tsanet_audit event=reconcile_cycle listed={} created={} skipped={} failed=0 cursor={}",
+        // Reset only after the mark is durable: a counter cleared ahead of the write
+        // reports health the cycle has not earned.
+        consecutiveFailures = 0;
+        log.info("tsanet_audit event=reconcile_cycle listed={} created={} skipped={}"
+                        + " in_flight=0 failed=0 cursor={}",
                 cases.size(), created, alreadyLinked, high == null ? cursor : high);
     }
 

@@ -73,6 +73,12 @@ class ReconciliationPollerTest {
         assertEquals("ticket-1", links.byToken("inbound-known").orElseThrow().ticketId(),
                 "the existing link must be untouched, not re-anchored");
         assertEquals(0, intercom.createCalls(), "no platform write for an already-linked case");
+        // The already-linked branch is what keeps the cursor moving in STEADY STATE —
+        // almost every cycle is all-skips. Without this assertion that branch is only
+        // ever exercised where advancing is forbidden, so a regression stopping it from
+        // raising the mark would go unnoticed and the window would widen forever.
+        assertEquals(Optional.of(at), state.cursor(),
+                "an already-linked case still advances the mark");
     }
 
     @Test
@@ -145,11 +151,65 @@ class ReconciliationPollerTest {
 
     @Test
     void disablingTheGuardStopsTheCycleEntirely() {
-        tsanet.seedInbound(inbound("inbound-disabled", Instant.now()));
+        // Asserts the gateway was never CALLED, not merely that no link appeared. A
+        // poller that still lists and then declines to act would satisfy the weaker
+        // assertion while making a partner API call every cycle for a disabled feature.
+        RecordingGateway recording = new RecordingGateway();
         InboundProperties off = new InboundProperties(TYPE, false, null, null);
-        new ReconciliationPoller(tsanet,
-                new InboundRequestHandler(tsanet, intercom, links, off), links, state, off).cycle();
-        assertTrue(links.byToken("inbound-disabled").isEmpty());
+        new ReconciliationPoller(recording,
+                new InboundRequestHandler(recording, intercom, links, off), links, state, off).cycle();
+        assertTrue(recording.calls == 0, "a disabled poller must not call the API at all");
+    }
+
+    @Test
+    void aClaimWithNoTicketHoldsTheCursor() {
+        // BLOCKER FROM THE #22 QA ROUND. byToken() is true for a bare claim as well as
+        // an anchored link, so the poller could count a LOST record() race as success:
+        // the live drain claims the token, this cycle's handle() returns via
+        // inbound_already_claimed, the outcome check sees the drain's claim, calls it
+        // created, and advances the cursor — and then the drain's create fails and
+        // releases the claim. The case is left with no link, outside the window, with no
+        // automatic recovery left. Every existing test seeded an ANCHORED link, so none
+        // of them could see this.
+        Instant at = Instant.now().minus(Duration.ofMinutes(5));
+        links.record(new SubmissionLink("inbound-claimed", "inbound:inbound-claimed", null, null,
+                null, "Test sdk2", null, true, null, Instant.now()));   // no ticketId = claim only
+        tsanet.seedInbound(inbound("inbound-claimed", at));
+
+        poller(TYPE).cycle();
+
+        assertTrue(state.cursor().isEmpty(),
+                "an unanchored claim is an unknown outcome; the cursor must not pass it");
+        assertEquals(0, intercom.createCalls(), "an in-flight claim is not this cycle's work");
+    }
+
+    @Test
+    void aFailedCursorPersistIsLoudAndCountedAsAFailure() {
+        // BLOCKER FROM THE #22 QA ROUND. The store throws on a broken volume by design
+        // (D12: refuse to hide it). The first version reset consecutiveFailures and then
+        // persisted outside any try, so a broken volume produced a healthy counter, no
+        // clean audit line, and an exception in Spring's scheduler handler instead.
+        PollerStateStore breaking = new PollerStateStore() {
+            @Override
+            public Optional<Instant> cursor() {
+                return Optional.empty();
+            }
+
+            @Override
+            public void cursor(Instant value) {
+                throw new IllegalStateException("cannot persist the reconciliation cursor");
+            }
+        };
+        tsanet.seedInbound(inbound("inbound-persistfail", Instant.now().minus(Duration.ofMinutes(5))));
+        InboundProperties props = new InboundProperties(TYPE, true,
+                Duration.ofHours(24), Duration.ofSeconds(120));
+        ReconciliationPoller p = new ReconciliationPoller(tsanet,
+                new InboundRequestHandler(tsanet, intercom, links, props), links, breaking, props);
+
+        p.cycle();
+
+        assertEquals(1, p.consecutiveFailures(),
+                "a cycle whose mark did not reach disk has not succeeded, whatever it created");
     }
 
     @Test
@@ -186,6 +246,7 @@ class ReconciliationPollerTest {
     /** Captures the cursor the poller actually asks for. */
     private static final class RecordingGateway extends FakeTsanetGateway {
         private Instant asked;
+        private int calls;
 
         RecordingGateway() {
             super(new MockEnvironment());
@@ -194,6 +255,7 @@ class ReconciliationPollerTest {
         @Override
         public List<InboundCase> listInboundUpdatedSince(Instant updatedAfter) {
             this.asked = updatedAfter;
+            this.calls++;
             return List.of();
         }
     }

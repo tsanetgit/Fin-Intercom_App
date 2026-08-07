@@ -615,6 +615,22 @@ whose `updatedAt` lands between the query and the write. A wedged cursor degrade
 — new cases still arrive each cycle because the window extends to now — so the cost is a
 widening query and loud logs, never lost work.
 
+**Success is judged by an ANCHORED link, not by a row existing.** `byToken()` is true for
+a bare claim as well as a finished ticket, and the handler returns normally when it LOSES
+the `record()` race to the live drain. Counting that as success let the cursor advance
+past a case whose create then failed and released the claim — leaving it with no link,
+outside the window, unrecoverable: the exact loss this entry forbids, produced by the
+rule meant to prevent it (#22 QA). An unanchored row is now read as IN FLIGHT: not a
+failure, no error noise, but the cursor holds, because an unknown outcome is not one to
+advance past.
+
+**The cursor is persisted BEFORE the cycle is declared healthy.** The store throws on a
+SQL failure by design, refusing to hide a broken volume (D12). The first version reset
+the failure counter and then persisted outside any try, so on a broken volume every cycle
+reported a healthy counter, never reached the clean audit line, and let the exception
+escape into the scheduler's handler in non-audit format — the store promised loudness and
+the caller undid it, in exactly the D12 failure mode this was supposed to cover (#22 QA).
+
 **Success is judged by outcome, not by absence of an exception.** `InboundRequestHandler`
 catches its own create failures, because the drain shares it and an escaping exception
 would kill that thread — so a failed create returns NORMALLY. The first version of the

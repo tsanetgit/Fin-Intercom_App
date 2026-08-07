@@ -31,7 +31,7 @@ connector:
     # on every branch so TSANet never redelivers), so this is what turns a lost event
     # into a late case instead of a lost one. ON by default: an operator who never heard
     # of it should get the recovery, not silently lose it.
-    reconcile-enabled-value: ${CONNECTOR_RECONCILE_ENABLED:true}
+    reconcile-enabled: ${CONNECTOR_RECONCILE_ENABLED:true}
     # fixedDelay, measured from the END of the previous cycle, so cycles cannot overlap.
     reconcile-interval-ms: ${CONNECTOR_RECONCILE_INTERVAL_MS:300000}
     # Lets the app finish booting, and keeps a crash-loop from hammering the list API.

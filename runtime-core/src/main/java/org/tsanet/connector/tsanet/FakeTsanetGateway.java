@@ -167,6 +167,15 @@ public class FakeTsanetGateway implements TsanetGateway {
      * same fact, free to disagree with the record the poller actually reads.
      */
     public void seedInbound(InboundCase inboundCase) {
+        if (inboundCase.updatedAt() == null) {
+            // Refused rather than documented. A null-updatedAt seed passes EVERY cursor
+            // window, so a test using one would silently stop exercising the filter it
+            // meant to exercise — the same vacuity that let the first cursor test pass
+            // against a fake with no filtering at all. Real list rows always carry it.
+            throw new IllegalArgumentException(
+                    "seeded inbound case needs an updatedAt; a null one matches every"
+                            + " cursor window and makes filter assertions vacuous");
+        }
         inboundFeed.add(inboundCase);
     }
 
@@ -190,9 +199,8 @@ public class FakeTsanetGateway implements TsanetGateway {
                 // A null cursor means "everything" — that is what a first run with no
                 // stored cursor asks for, and the real API treats an absent filter the
                 // same way. Refusing it here would hide that path from every test.
-                .filter(c -> updatedAfter == null
-                        || c.updatedAt() == null
-                        || !c.updatedAt().isBefore(updatedAfter))
+                // updatedAt is non-null by construction (seedInbound refuses otherwise).
+                .filter(c -> updatedAfter == null || !c.updatedAt().isBefore(updatedAfter))
                 .toList();
     }
 
