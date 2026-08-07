@@ -2,6 +2,7 @@ package org.tsanet.connector.intercom;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,6 +31,17 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
 
     @Override
     public void record(SubmissionLink link) {
+        // Both routing keys validated BEFORE the first map mutation, and as one check:
+        // caught at tokenByInternal instead, a null internal case number would leave the
+        // link in byToken and out of the internal-case index — the partially-recorded
+        // link that the single-row SQL store cannot represent. IllegalStateException
+        // rather than the NPE the maps raise on their own, so a deliberate rejection is
+        // distinguishable from an accidental one (SqliteSubmissionLinkTable throws the
+        // same; the contract pins the type).
+        if (link.token() == null || link.internalCaseNumber() == null) {
+            throw new IllegalStateException("cannot record a submission link without both a"
+                    + " token and an internal case number; the case would have no route home");
+        }
         Entry previous = byToken.putIfAbsent(link.token(),
                 new Entry(link, new AtomicReference<>(AnnotationState.NONE)));
         if (previous != null) {
@@ -47,10 +59,12 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
         }
     }
 
-    // A null key answers empty on all three lookups rather than throwing: keys arrive
-    // from webhook payloads and from links whose optional fields are null, so
-    // ConcurrentHashMap.get(null) would NPE the event drain on a reachable path, and the
-    // SQL store answers empty for the same input. The contract pins them to one answer.
+    // Why every keyed entry point below tolerates a null key: the keys arrive from
+    // webhook payloads and from links whose optional fields are null, and
+    // ConcurrentHashMap throws on a null key where the SQL store's `WHERE col = NULL`
+    // simply matches nothing — so an unguarded map here NPEs the event drain on a path
+    // the SQL store handles. The normative rule lives on SubmissionLinkTable and is
+    // pinned across the whole keyed surface by SubmissionLinkTableContractTest.
 
     @Override
     public Optional<SubmissionLink> byToken(String token) {
@@ -82,16 +96,32 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
 
     @Override
     public AnnotationState annotationState(String token) {
-        Entry entry = byToken.get(token);
+        Entry entry = entryFor(token);
         return entry == null ? AnnotationState.NONE : entry.annotation().get();
     }
 
     @Override
     public void annotationState(String token, AnnotationState state) {
-        Entry entry = byToken.get(token);
-        if (entry != null) {
-            entry.annotation().set(state);
+        // State first, mirroring the SQL store, which binds it as parameter 1 and so
+        // throws on a null state whatever the token is. A null STATE is not a missing
+        // key: accepting it would leave this store answering null from a method whose
+        // contract is NONE-when-unset, and the drain reads that to decide whether an
+        // annotation already ran.
+        Objects.requireNonNull(state, "annotation state");
+        Entry entry = entryFor(token);
+        if (entry == null) {
+            // Warns rather than passing silently, as the SQL store's zero-rowcount does:
+            // a caller that believes it recorded annotation progress and did not is the
+            // failure this line exists to make visible. A null token lands here too,
+            // exactly as `UPDATE ... WHERE token = NULL` matches no row.
+            log.warn("annotation state {} written for an unknown link token", state);
+            return;
         }
+        entry.annotation().set(state);
+    }
+
+    private Entry entryFor(String token) {
+        return token == null ? null : byToken.get(token);
     }
 
     @Override

@@ -75,22 +75,12 @@ class SqliteSubmissionLinkTableTest extends SubmissionLinkTableContractTest {
                 "nulls and the Instant must round-trip through TEXT storage unchanged");
     }
 
-    @Test
-    void aMalformedLinkThrowsInsteadOfVanishing() {
-        // The decisive probe for ON CONFLICT DO NOTHING over INSERT OR IGNORE: OR IGNORE
-        // swallows the NOT NULL violation too, so this record would return normally, the
-        // caller would carry on, and the case would have no route home. Wrong-but-well-
-        // formed at the Java level (a real SubmissionLink), rejected at the store.
-        SubmissionLink noToken = new SubmissionLink(null, "flow-p4", "w1", "conv-p4", "t-1",
-                "Partner Co", null, true, null, Instant.parse("2026-08-06T02:00:00Z"));
-        assertThrows(IllegalStateException.class, () -> table.record(noToken));
-        assertEquals(0, table.size(), "nothing was written");
-
-        SubmissionLink noInternal = new SubmissionLink("TSA-p5", null, "w1", "conv-p5", "t-1",
-                "Partner Co", null, true, null, Instant.parse("2026-08-06T02:00:00Z"));
-        assertThrows(IllegalStateException.class, () -> table.record(noInternal));
-        assertEquals(0, table.size());
-    }
+    // aMalformedLinkThrowsInsteadOfVanishing lived here and is now
+    // aMalformedLinkIsRejectedWithNothingRecorded in the contract: it was asserting a
+    // property of every store, in the one place where the sibling store could not fail
+    // it — and the sibling store did fail it, leaving a link in one index and out of the
+    // other. It still pins ON CONFLICT DO NOTHING over INSERT OR IGNORE here, since the
+    // contract runs against this store too.
 
     @Test
     void anUnreadableAnnotationStateThrowsRatherThanReadingAsNone() throws SQLException {

@@ -248,8 +248,8 @@ that quietly breaks it:
 - **`ON CONFLICT(token) DO NOTHING`**, never `INSERT OR IGNORE`. OR IGNORE suppresses
   *every* constraint failure, so a malformed link (null token, null internal case
   number) disappears with no error and the case has no route home. Pinned by
-  `aMalformedLinkThrowsInsteadOfVanishing`, which fails when the statement is swapped
-  back (verified by mutation, not by reading).
+  `aMalformedLinkIsRejectedWithNothingRecorded`, which fails when the statement is
+  swapped back (verified by mutation, not by reading).
 - **Every `SQLException` surfaces unchecked.** A logged-and-swallowed `record()` failure
   means the partner case exists and nothing points at it; the loud failure at submit
   time is the honest one. Same reasoning for `annotation_state`: it is parsed with
@@ -271,15 +271,58 @@ owning a duplicated `internalCaseNumber` - two links can share one, that is D2's
 duplicate window, and reconcile must keep answering with the same case it answered with
 before. A replay drops the whole row, so its *new* secondary keys register nowhere; that
 is asserted separately from the identical-keys replay, which cannot tell an index that was
-skipped from one rewritten to the same value. Null keys answer empty on all three lookups
-rather than throwing, because they arrive for real (a webhook payload without its token, a
-ticketless link with no conversation) and an NPE there kills the event drain. That last one
-is not a hypothetical: the contract's first run caught `byConversationId(null)` answering
-empty in SQL and NPE-ing in the map store.
+skipped from one rewritten to the same value.
+
+A null key is answered rather than thrown on, everywhere a key is taken, because null keys
+arrive for real (a webhook payload without its token, a ticketless link with no
+conversation) and an NPE there kills the event drain. That rule is normative on
+`SubmissionLinkTable` itself rather than restated per store, and the contract pins it
+across the whole keyed surface at once. **The reason it is stated that way is that the
+narrower version failed twice.** The contract's first run caught `byConversationId(null)`
+answering empty in SQL and NPE-ing in the map store; the guard was then applied to the
+three lookups, which left both `annotationState` arities NPE-ing on the same input, and QA
+measured that in round 2. Guarding a defect class at the sites you happen to be looking at
+is how it survives review, so the contract now asks about the surface rather than about a
+list of methods.
+
+Two asymmetries worth keeping straight, since "nulls are benign here" is the wrong summary:
+
+- **`record` refuses instead of answering.** A link missing its token or its internal case
+  number is rejected with `IllegalStateException` — atomically, nothing left on any index —
+  because a link that cannot be found later is a partner case with no route home. The type
+  is load-bearing, not decorative: an unguarded map store raises `NullPointerException`
+  from its own first `put`, so a test written as `assertThrows(RuntimeException.class)`
+  passes on the broken store while measuring nothing. Pinning `IllegalStateException` is
+  what distinguishes a deliberate rejection from an accidental one.
+- **A null *state* is refused, not stored.** It is not a missing key, it is a value outside
+  the enum: the map store's `AtomicReference.set(null)` would answer `null` forever from a
+  method contracted to answer `NONE` when unset, where the SQL store throws at
+  `state.name()`. Silent corruption on the read the drain uses to decide whether an
+  annotation has already run, so both stores now throw.
+
+One property is asserted but not falsifiable against either current store, and is kept
+deliberately: that a rejected `record` leaves nothing in the *secondary* indexes. Neither
+store can fail it today — the SQL store keeps one row, and every secondary lookup in the
+map store resolves through `byToken` (`byInternalCaseNumber` does `flatMap(this::byToken)`,
+`byConversationId` maps and drops empties), so a dangling secondary entry is masked by
+construction. A mutant that writes the conversation index and then rejects survives the
+suite. `byToken` and `size()` are what actually witness a partial record; the secondary
+assertions are there for a store that maintains its indexes independently, which is exactly
+what the Postgres implementation at GA would be.
 
 Selection is `connector.links.store` (`memory` default, `sqlite` durable), and every way
 of reaching production without a durable store is refused at startup rather than
-discovered after a restart. The memory store refuses the prod profile the way the fake
+discovered after a restart — **under the prod profile, which the deployment is
+responsible for setting.** That scoping is the honest statement: the memory-store refusal
+and the absolute-path check are both conditioned on `prod` being active, so a deployment
+that forgets `SPRING_PROFILES_ACTIVE=prod` gets neither, and no signal here can detect
+that. It is the established convention (the fake gateways gate identically) rather than
+anything specific to this store, and the profile itself is the residual assumption the
+whole guard rests on. The one check that is *not* profile-gated is the store-name
+rejection, since `LinkProperties`' compact constructor runs at binding under every
+profile — `aStoreValueThatSelectsNoBeanIsRejectedByName` exercises it without prod.
+
+The memory store refuses the prod profile the way the fake
 gateways do. A store value that selects neither bean is rejected by name, because the
 alternative is a `NoSuchBeanDefinitionException` that names no cause; the validation
 mirrors `@ConditionalOnProperty` exactly - case-insensitive, no trimming, both measured
@@ -299,3 +342,45 @@ against the container working directory and would otherwise be the one remaining
 look durable and not be. Named non-goal: this store is single-node. The day the connector
 runs more than one replica, SQLite is wrong and the interface exists so that day costs a
 new implementation and nothing else.
+
+**Durable storage and WAL-compatible storage are not the same requirement, and on ACA the
+only option that satisfies the first may not satisfy the second.** The paragraph above
+asks for storage that outlives the container and says nothing about its filesystem
+semantics — the same shape of gap it exists to close, raised by QA on #13. Measured
+against both vendors' docs rather than recalled:
+
+- Azure Container Apps: container-scoped and replica-scoped (`EmptyDir`) storage are both
+  ephemeral; **Azure Files is the only persistent option**, mounted over SMB or NFS
+  (Microsoft, *Use storage mounts in Azure Container Apps*).
+- SQLite: *"All processes using a database must be on the same host computer; WAL does not
+  work over a network filesystem. This is because WAL requires all processes to share a
+  small amount of memory"* (sqlite.org/wal.html).
+
+So the one mount that meets the durability precondition is the filesystem class WAL is
+documented not to work on, and `SqliteSubmissionLinkTable` sets `journal_mode=WAL`
+explicitly.
+
+What the sources do **not** settle is which way an Azure Files mount fails. SQLite says
+*"If the VFS does not support shared-memory methods, then the attempt to open a database
+that is already in WAL mode, or the attempt to convert a database into WAL mode, will
+fail"* — but that condition is on the **VFS**, not on the filesystem being networked, and
+the standard Linux unix VFS supplies shared memory by mmap-ing a `-shm` file, which can
+succeed on an SMB or NFS mount. So the mount may refuse to boot (loud, the same class of
+answer as the blank-path and relative-path checks), or it may open quietly on a filesystem
+whose locking is unreliable. The two quotes above are verified; **which branch Azure Files
+takes is not, and cannot be established from documentation.** That is why the mount check
+below is mandatory rather than advisory: there is no guarantee that startup catches this.
+
+The documented remedy is *"WAL databases can be created, read, and written even if shared
+memory is unavailable as long as the locking_mode is set to EXCLUSIVE before the first
+attempted access."* It is **not** a one-line change here, and that is why it is not in
+this PR: exclusive locking holds the database lock for a connection's lifetime, and this
+DAO deliberately uses a short-lived connection per operation with the drain and canvas
+threads both writing — so adopting it means re-deciding the connection model (a single
+long-lived connection, or serialized access), not setting a pragma. Neither variant can be
+validated without a real Azure Files mount to test against.
+
+**Therefore: confirm the actual mount before the first prod deploy**, and if it is Azure
+Files over SMB or NFS, decide between `locking_mode=EXCLUSIVE` with a reworked connection
+model and a rollback journal (which costs the `synchronous=FULL` analysis above a fresh
+look) before that deploy, not after.

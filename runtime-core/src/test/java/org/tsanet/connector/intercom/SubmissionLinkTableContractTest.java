@@ -2,6 +2,7 @@ package org.tsanet.connector.intercom;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
@@ -112,12 +113,90 @@ public abstract class SubmissionLinkTableContractTest {
         assertTrue(table().byToken("nope").isEmpty());
         assertTrue(table().byInternalCaseNumber("nope").isEmpty());
         assertTrue(table().byConversationId("nope").isEmpty());
-        // Null keys reach these lookups for real: a webhook payload missing its token, a
-        // ticketless link with no conversation. Every lookup answers empty rather than
-        // throwing, because a NPE here kills the event drain.
+    }
+
+    @Test
+    void everyKeyedEntryPointAnswersANullKeyTheWayItAnswersAnAbsentOne() {
+        // Null keys reach this table for real: a webhook payload missing its token, a
+        // ticketless link with no conversation. An NPE here kills the event drain, so
+        // every entry point that takes a key answers rather than throws — and this test
+        // covers the WHOLE keyed surface deliberately. Pinning some of it is what let
+        // the two stores diverge on annotationState while byConversationId agreed: the
+        // guard was applied at three sites of one defect class and the other two were
+        // invisible precisely because nothing here asked.
+        table().record(link("TSA-n", "flow-n", "conv-n"));
+        table().annotationState("TSA-n", AnnotationState.FULL);
+
         assertTrue(table().byToken(null).isEmpty());
         assertTrue(table().byInternalCaseNumber(null).isEmpty());
         assertTrue(table().byConversationId(null).isEmpty());
+        assertEquals(AnnotationState.NONE, table().annotationState(null),
+                "a null token has no state, the same answer an unknown token gets");
+
+        // The write arity asserted by its EFFECT, not by "it did not throw": a store
+        // that swallowed the null and wrote somewhere would pass the weaker check.
+        table().annotationState(null, AnnotationState.DEGRADED);
+        assertEquals(AnnotationState.FULL, table().annotationState("TSA-n"),
+                "a null-token write must not reach a real link's state");
+        assertEquals(AnnotationState.NONE, table().annotationState(null));
+        assertEquals(1, table().size(), "a null-token write must not conjure a link");
+    }
+
+    @Test
+    void aNullAnnotationStateIsRefusedRatherThanStored() {
+        // The one asymmetry in the null story, and the reason it is not "nulls are
+        // always benign": a null STATE is not a missing key, it is a value outside the
+        // enum. A store that accepts it answers null from a method whose contract is
+        // "never null" — silent corruption, and worse than the throw, since the drain
+        // reads this to decide whether an annotation already ran.
+        table().record(link("TSA-ns", "flow-ns", "conv-ns"));
+        table().annotationState("TSA-ns", AnnotationState.FULL);
+        assertThrows(NullPointerException.class, () -> table().annotationState("TSA-ns", null));
+        assertEquals(AnnotationState.FULL, table().annotationState("TSA-ns"),
+                "a refused write must not have moved the state on the way out");
+    }
+
+    @Test
+    void aMalformedLinkIsRejectedWithNothingRecorded() {
+        // record() is the exception to the null story above: the two keys a link is
+        // routed by are refused rather than answered, because a link that cannot be
+        // found later is a partner case with no route home. Wrong-but-well-formed at
+        // the Java level — a real SubmissionLink — rejected at the store.
+        //
+        // Rejected ATOMICALLY is the load-bearing half: a store that validates its keys
+        // one at a time as it writes them leaves the link in the first index and out of
+        // the second, which is a token that resolves to a case reconcile cannot find.
+        // size() and byToken are what catch that today (measured: a validate-as-it-writes
+        // mutant fails the size assertion below). The two SECONDARY-index assertions are
+        // prospective and cannot fail against either current store — every secondary
+        // lookup in the map store resolves through byToken, so a dangling entry is masked,
+        // and the SQL store keeps one row. They are kept for a store that maintains its
+        // indexes independently, which is what Postgres at GA would be. See D11; do not
+        // read them as covering the case above.
+        //
+        // IllegalStateException specifically, not any RuntimeException: an unguarded
+        // map store raises NPE from its own first put, which would satisfy the looser
+        // check while measuring nothing. The type is how a deliberate rejection is told
+        // apart from an accidental one. (For the SQL store this is also what pins
+        // ON CONFLICT DO NOTHING over INSERT OR IGNORE, which would swallow the NOT
+        // NULL violation and return normally — see SqliteSubmissionLinkTable.)
+        SubmissionLink noToken = new SubmissionLink(null, "flow-m1", "w1", "conv-m1", "t-1",
+                "Partner Co", null, true, null, Instant.parse("2026-08-06T02:00:00Z"));
+        assertThrows(IllegalStateException.class, () -> table().record(noToken));
+        assertEquals(0, table().size(), "nothing was written");
+        assertTrue(table().byInternalCaseNumber("flow-m1").isEmpty(),
+                "a rejected link must not survive in the internal-case index");
+        assertTrue(table().byConversationId("conv-m1").isEmpty(),
+                "a rejected link must not survive in the conversation index");
+
+        SubmissionLink noInternal = new SubmissionLink("TSA-m2", null, "w1", "conv-m2", "t-1",
+                "Partner Co", null, true, null, Instant.parse("2026-08-06T02:00:00Z"));
+        assertThrows(IllegalStateException.class, () -> table().record(noInternal));
+        assertEquals(0, table().size(), "nothing was written");
+        assertTrue(table().byToken("TSA-m2").isEmpty(),
+                "a rejected link must not survive in the token index");
+        assertTrue(table().byConversationId("conv-m2").isEmpty(),
+                "a rejected link must not survive in the conversation index");
     }
 
     @Test
