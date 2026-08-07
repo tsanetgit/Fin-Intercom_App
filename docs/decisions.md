@@ -107,9 +107,11 @@ only under the `sdk` Maven profile, so a fresh clone builds green without the SD
 local repository. The SDK stack is consumed verbatim from `tsanetgit/Connect_SDK` branch
 `oauth` (commit `0f57fac`) via the connect-sdk-demo modules until that branch merges;
 do not fork-fix the library here, raise changes upstream. Building `connect-library`
-from source requires `tsanetgit/Connect-API-Code` checked out as a sibling directory on
-the `beta` branch (its `develop` branch breaks the current codegen); CI encodes this in
-the gated `sdk` job.
+from source needs the Connect API spec from `tsanetgit/Connect-API-Code` on the `beta`
+branch (its `develop` branch breaks the current codegen). **SUPERSEDED IN PART BY D11:**
+that spec is now vendored in-repo and passed via `-Dconnect.openapi.spec`, so no sibling
+checkout and no credential are required, and the `sdk` job is no longer gated — it runs
+on every PR. The verbatim-SDK rule above is unaffected.
 
 ## D7. Skeleton non-goals
 

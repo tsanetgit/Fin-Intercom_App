@@ -48,9 +48,11 @@ import org.tsanet.connector.sdk.SdkTsanetGateway;
  * real method instead of a third copy of the class.
  *
  * <p>WHERE THIS RUNS: connect-gateway is outside the default reactor (D6), so
- * this class runs only under {@code -Psdk}, and the CI sdk job skips every real
- * step until the CONNECT_API_CODE_TOKEN repo secret exists. Until then this
- * guard is a local gate, not a CI one.
+ * this class runs only under {@code -Psdk} — which the CI sdk job now does on
+ * every PR, against the vendored spec (D11). It was previously a local-only
+ * gate: the job skipped every real step behind an unset CONNECT_API_CODE_TOKEN
+ * while reporting success, so a failure here never reached anyone. Treat a
+ * failure as a CI signal.
  */
 class InvisibleCharParityTest {
 
