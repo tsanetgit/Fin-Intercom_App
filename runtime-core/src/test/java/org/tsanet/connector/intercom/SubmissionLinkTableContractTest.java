@@ -180,6 +180,50 @@ public abstract class SubmissionLinkTableContractTest {
     }
 
     @Test
+    void byTicketIdRefusesAnAmbiguousTicketRatherThanPicking() {
+        // One support ticket can legitimately anchor SEVERAL cases: an agent may
+        // escalate one customer problem to two partners. Answering with either one
+        // would let a response flow reply to the wrong partner, so ambiguity is empty.
+        table().record(link("TSA-one", "flow-one", "conv-1"));
+        assertEquals("TSA-one", table().byTicketId("t-9").orElseThrow().token());
+
+        table().record(link("TSA-two", "flow-two", "conv-2"));  // same ticket id, t-9
+        assertTrue(table().byTicketId("t-9").isEmpty(),
+                "two cases on one ticket is ambiguous; picking one answers the wrong partner");
+        assertTrue(table().byTicketId(null).isEmpty());
+        assertTrue(table().byTicketId("no-such-ticket").isEmpty());
+    }
+
+    @Test
+    void caseStateMovesOnlyFromTheExpectedState() {
+        // Two panels open on one ticket must not both respond to the partner. The
+        // loser of the compare-and-set re-renders what actually holds.
+        table().record(link("TSA-state", "flow-state", "conv-state"));
+        assertEquals(CaseState.PENDING, table().caseState("TSA-state"));
+        assertTrue(table().caseState("TSA-state", CaseState.PENDING, CaseState.ACCEPTED));
+        assertEquals(CaseState.ACCEPTED, table().caseState("TSA-state"));
+
+        assertFalse(table().caseState("TSA-state", CaseState.PENDING, CaseState.REJECTED),
+                "a stale panel must not be able to reject an accepted case");
+        assertEquals(CaseState.ACCEPTED, table().caseState("TSA-state"));
+
+        assertEquals(CaseState.PENDING, table().caseState("no-such-token"),
+                "an unknown token is PENDING, never a crash");
+        assertFalse(table().caseState("no-such-token", CaseState.PENDING, CaseState.ACCEPTED));
+        assertFalse(table().caseState(null, CaseState.PENDING, CaseState.ACCEPTED));
+    }
+
+    @Test
+    void theCaseNumberWeQuotedIsRecorded() {
+        table().record(link("TSA-num", "flow-num", "conv-num"));
+        assertNull(table().byToken("TSA-num").orElseThrow().caseNumber());
+        table().caseNumber("TSA-num", "121556608");
+        assertEquals("121556608", table().byToken("TSA-num").orElseThrow().caseNumber());
+        table().caseNumber("TSA-num", "  ");  // blank never overwrites what we sent
+        assertEquals("121556608", table().byToken("TSA-num").orElseThrow().caseNumber());
+    }
+
+    @Test
     void absentKeysAnswerEmpty() {
         table().record(link("TSA-4", "flow-4", "conv-4"));
         assertTrue(table().byToken("nope").isEmpty());

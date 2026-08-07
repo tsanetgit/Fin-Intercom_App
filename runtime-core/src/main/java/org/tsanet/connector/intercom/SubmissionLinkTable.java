@@ -98,5 +98,33 @@ public interface SubmissionLinkTable {
      */
     void anchor(String token, String ticketId);
 
+    /**
+     * The link anchored to this platform ticket, or empty.
+     *
+     * <p>The reverse of {@link #byToken}: an agent acting in a panel knows the ticket
+     * they are looking at, not the case token. Unique by construction — the inbound
+     * slice guarantees one ticket per case — which is what lets a response flow key
+     * its transition guard on the row it finds here.
+     */
+    Optional<SubmissionLink> byTicketId(String ticketId);
+
+    /** Never null: {@link CaseState#PENDING} for an unset, unknown, or null token. */
+    CaseState caseState(String token);
+
+    /**
+     * Moves the case state, but only from {@code expected}, and reports whether the
+     * move happened.
+     *
+     * <p>Compare-and-set rather than a plain setter for the same reason
+     * {@link #record} returns a verdict: two panels open on one ticket must not both
+     * be able to respond to the partner. The loser sees false and re-renders the state
+     * that actually holds.
+     */
+    boolean caseState(String token, CaseState expected, CaseState next);
+
+    /** Records the case number sent to the partner, so the value we quoted survives
+     * independently of whatever convention produced it. */
+    void caseNumber(String token, String caseNumber);
+
     int size();
 }

@@ -20,7 +20,8 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
     private static final Logger log = LoggerFactory.getLogger(InMemorySubmissionLinkTable.class);
     private static final int SIZE_WARN_THRESHOLD = 5_000;
 
-    private record Entry(SubmissionLink link, AtomicReference<AnnotationState> annotation) {
+    private record Entry(SubmissionLink link, AtomicReference<AnnotationState> annotation,
+            AtomicReference<CaseState> caseState) {
     }
 
     private final Map<String, Entry> byToken = new ConcurrentHashMap<>();
@@ -43,7 +44,8 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
                     + " token and an internal case number; the case would have no route home");
         }
         Entry previous = byToken.putIfAbsent(link.token(),
-                new Entry(link, new AtomicReference<>(AnnotationState.NONE)));
+                new Entry(link, new AtomicReference<>(AnnotationState.NONE),
+                        new AtomicReference<>(CaseState.PENDING)));
         if (previous != null) {
             return false; // replay: first record wins, indexes already point here
         }
@@ -166,7 +168,56 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
             SubmissionLink l = entry.link();
             return new Entry(new SubmissionLink(l.token(), l.internalCaseNumber(), l.workspaceId(),
                     l.conversationId(), ticketId, l.partnerDisplay(), l.respondBy(), l.testCase(),
-                    l.submittedBy(), l.submittedAt()), entry.annotation());
+                    l.submittedBy(), l.submittedAt(), l.caseNumber()), entry.annotation(),
+                    entry.caseState());
+        });
+    }
+
+    @Override
+    public Optional<SubmissionLink> byTicketId(String ticketId) {
+        if (ticketId == null || ticketId.isBlank()) {
+            return Optional.empty();
+        }
+        List<SubmissionLink> matches = byToken.values().stream()
+                .map(Entry::link)
+                .filter(l -> ticketId.equals(l.ticketId()))
+                .toList();
+        if (matches.size() > 1) {
+            // Several cases CAN share a ticket; acting on the wrong one answers the
+            // wrong partner, so ambiguity refuses rather than picking (the SQL store
+            // does the same, and the contract pins it).
+            log.warn("tsanet_audit event=link_ambiguous_for_ticket ticket={} matches={}",
+                    ticketId, matches.size());
+            return Optional.empty();
+        }
+        return matches.stream().findFirst();
+    }
+
+    @Override
+    public CaseState caseState(String token) {
+        Entry entry = token == null ? null : byToken.get(token);
+        return entry == null ? CaseState.PENDING : entry.caseState().get();
+    }
+
+    @Override
+    public boolean caseState(String token, CaseState expected, CaseState next) {
+        if (token == null || expected == null || next == null) {
+            return false;
+        }
+        Entry entry = byToken.get(token);
+        return entry != null && entry.caseState().compareAndSet(expected, next);
+    }
+
+    @Override
+    public void caseNumber(String token, String caseNumber) {
+        if (token == null || caseNumber == null || caseNumber.isBlank()) {
+            return;
+        }
+        byToken.computeIfPresent(token, (key, entry) -> {
+            SubmissionLink l = entry.link();
+            return new Entry(new SubmissionLink(l.token(), l.internalCaseNumber(), l.workspaceId(),
+                    l.conversationId(), l.ticketId(), l.partnerDisplay(), l.respondBy(), l.testCase(),
+                    l.submittedBy(), l.submittedAt(), caseNumber), entry.annotation(), entry.caseState());
         });
     }
 
