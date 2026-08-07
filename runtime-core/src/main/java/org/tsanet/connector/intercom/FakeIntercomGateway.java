@@ -92,6 +92,38 @@ public class FakeIntercomGateway implements IntercomGateway {
         return Map.copyOf(ticketsByToken);
     }
 
+    private final Map<String, String> statesByTicket = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicInteger stateMoveCalls =
+            new java.util.concurrent.atomic.AtomicInteger();
+    /** Set to make the next state move throw, for the handler's failure path. */
+    public volatile boolean failNextStateMove;
+
+    @Override
+    public void moveTicketState(String ticketId, String stateId) {
+        // Counted BEFORE validation, so a caller that should not have called at all is
+        // distinguishable from one that called with a bad argument. Asserting only on
+        // the resulting state cannot tell those apart — the fake rejects both.
+        stateMoveCalls.incrementAndGet();
+        if (ticketId == null || ticketId.isBlank() || stateId == null || stateId.isBlank()) {
+            throw new IntercomException("moveTicketState needs both a ticket id and a state id");
+        }
+        if (failNextStateMove) {
+            failNextStateMove = false;
+            throw new IntercomException("injected state-move failure");
+        }
+        statesByTicket.put(ticketId, stateId);
+    }
+
+    /** How many state moves were ATTEMPTED, valid or not — the never-called probe. */
+    public int stateMoveCalls() {
+        return stateMoveCalls.get();
+    }
+
+    /** The state a ticket was last moved to, or null. */
+    public String stateOf(String ticketId) {
+        return statesByTicket.get(ticketId);
+    }
+
     @Override
     public boolean healthy() {
         return true;

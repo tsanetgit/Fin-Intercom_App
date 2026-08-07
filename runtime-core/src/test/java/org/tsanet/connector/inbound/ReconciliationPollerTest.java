@@ -34,7 +34,7 @@ class ReconciliationPollerTest {
 
     private ReconciliationPoller poller(String ticketType) {
         InboundProperties props = new InboundProperties(ticketType, true,
-                Duration.ofHours(24), Duration.ofSeconds(120));
+                Duration.ofHours(24), Duration.ofSeconds(120), null);
         return new ReconciliationPoller(tsanet,
                 new InboundRequestHandler(tsanet, intercom, links, props), links, state, props);
     }
@@ -155,7 +155,7 @@ class ReconciliationPollerTest {
         // poller that still lists and then declines to act would satisfy the weaker
         // assertion while making a partner API call every cycle for a disabled feature.
         RecordingGateway recording = new RecordingGateway();
-        InboundProperties off = new InboundProperties(TYPE, false, null, null);
+        InboundProperties off = new InboundProperties(TYPE, false, null, null, null);
         new ReconciliationPoller(recording,
                 new InboundRequestHandler(recording, intercom, links, off), links, state, off).cycle();
         assertEquals(0, recording.calls, "a disabled poller must not call the API at all");
@@ -208,7 +208,7 @@ class ReconciliationPollerTest {
         };
         tsanet.seedInbound(inbound("inbound-persistfail", Instant.now().minus(Duration.ofMinutes(5))));
         InboundProperties props = new InboundProperties(TYPE, true,
-                Duration.ofHours(24), Duration.ofSeconds(120));
+                Duration.ofHours(24), Duration.ofSeconds(120), null);
         ReconciliationPoller p = new ReconciliationPoller(tsanet,
                 new InboundRequestHandler(tsanet, intercom, links, props), links, breaking, props);
 
@@ -227,7 +227,7 @@ class ReconciliationPollerTest {
         state.cursor(stored);
         RecordingGateway recording = new RecordingGateway();
         InboundProperties props = new InboundProperties(TYPE, true,
-                Duration.ofHours(24), Duration.ofSeconds(120));
+                Duration.ofHours(24), Duration.ofSeconds(120), null);
         new ReconciliationPoller(recording,
                 new InboundRequestHandler(recording, intercom, links, props), links, state, props)
                 .cycle();
@@ -241,7 +241,7 @@ class ReconciliationPollerTest {
         // way this component can hurt the API it is protecting.
         RecordingGateway recording = new RecordingGateway();
         InboundProperties props = new InboundProperties(TYPE, true,
-                Duration.ofHours(24), Duration.ofSeconds(120));
+                Duration.ofHours(24), Duration.ofSeconds(120), null);
         new ReconciliationPoller(recording,
                 new InboundRequestHandler(recording, intercom, links, props), links, state, props)
                 .cycle();
@@ -267,7 +267,7 @@ class ReconciliationPollerTest {
         tsanet.seedInbound(inbound("inbound-raced", at));
 
         InboundProperties props = new InboundProperties(TYPE, true,
-                Duration.ofHours(24), Duration.ofSeconds(120));
+                Duration.ofHours(24), Duration.ofSeconds(120), null);
         ReconciliationPoller p = new ReconciliationPoller(tsanet,
                 new InboundRequestHandler(tsanet, intercom, racing, props), racing, state, props);
         p.cycle();
