@@ -57,6 +57,15 @@ class GatewayFaultRecoveryTest {
     /** First submit throws a plain RuntimeException (outside the taxonomy); later ones land. */
     static final class FaultyGateway implements TsanetGateway {
         @Override
+        public java.util.List<org.tsanet.connector.tsanet.dto.InboundCase>
+                listInboundUpdatedSince(java.time.Instant updatedAfter) {
+            // This stub exists to exercise the outbound canvas flow; the poller's read
+            // is not part of that. Empty rather than throwing, so an accidental call
+            // reads as "no work" instead of failing an unrelated assertion.
+            return java.util.List.of();
+        }
+
+        @Override
         public void approve(String token, org.tsanet.connector.tsanet.dto.EngineerIdentity e,
                 String caseNumber, String nextSteps) {
             throw new UnsupportedOperationException("not exercised by this test's flow");

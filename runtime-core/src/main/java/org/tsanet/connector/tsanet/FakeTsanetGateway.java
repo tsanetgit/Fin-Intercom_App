@@ -154,6 +154,56 @@ public class FakeTsanetGateway implements TsanetGateway {
         return Optional.empty();
     }
 
+    /**
+     * Inbound cases the poller should discover. Empty by default, so the poller is a
+     * no-op in ordinary development rather than inventing partner traffic.
+     */
+    private final List<InboundCase> inboundFeed = new CopyOnWriteArrayList<>();
+    private volatile RuntimeException listFailure;
+
+    /**
+     * Adds a case the poller will see. The case carries its own updatedAt, exactly as a
+     * real list row does — a parallel map of timestamps would be a second source of the
+     * same fact, free to disagree with the record the poller actually reads.
+     */
+    public void seedInbound(InboundCase inboundCase) {
+        if (inboundCase.updatedAt() == null) {
+            // Refused rather than documented. A null-updatedAt seed passes EVERY cursor
+            // window, so a test using one would silently stop exercising the filter it
+            // meant to exercise — the same vacuity that let the first cursor test pass
+            // against a fake with no filtering at all. Real list rows always carry it.
+            throw new IllegalArgumentException(
+                    "seeded inbound case needs an updatedAt; a null one matches every"
+                            + " cursor window and makes filter assertions vacuous");
+        }
+        inboundFeed.add(inboundCase);
+    }
+
+    /** Makes list calls fail; null clears it. */
+    public void failListWith(RuntimeException failure) {
+        this.listFailure = failure;
+    }
+
+    @Override
+    public List<InboundCase> listInboundUpdatedSince(Instant updatedAfter) {
+        RuntimeException injected = listFailure;
+        if (injected != null) {
+            throw injected;
+        }
+        return inboundFeed.stream()
+                // Direction is filtered server-side by the real gateway; mirroring that
+                // here keeps a seeded OUTBOUND case out of the feed exactly as the API
+                // would, so a caller's own direction check is not the only thing
+                // standing between an outbound case and a duplicate ticket.
+                .filter(InboundCase::inbound)
+                // A null cursor means "everything" — that is what a first run with no
+                // stored cursor asks for, and the real API treats an absent filter the
+                // same way. Refusing it here would hide that path from every test.
+                // updatedAt is non-null by construction (seedInbound refuses otherwise).
+                .filter(c -> updatedAfter == null || !c.updatedAt().isBefore(updatedAfter))
+                .toList();
+    }
+
     /** What the fake was last asked to send, so flows can assert the payload. */
     public record Responded(String token, String action, EngineerIdentity engineer,
             String caseNumber, String text) {

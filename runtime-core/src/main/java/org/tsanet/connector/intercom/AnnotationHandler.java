@@ -24,7 +24,9 @@ import org.tsanet.connector.events.InboundEventHandler;
  * scheduler so the drain thread never sleeps; re-offers go straight to the queue and
  * therefore bypass webhook-intake dedupe by construction. After the last attempt the
  * failure is audited loudly — the link table plus the audit line are the manual
- * re-drive path until the reconciliation poller exists.
+ * re-drive path for annotation. The reconciliation poller (Phase 2) recovers missing
+ * inbound TICKETS, not missing annotations — a link that exists but was never
+ * annotated is outside its prefilter, so this remains the gap it does not close.
  */
 @Component
 public class AnnotationHandler implements InboundEventHandler {

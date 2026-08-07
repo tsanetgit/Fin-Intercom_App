@@ -12,9 +12,13 @@ import org.tsanet.connector.events.EventQueue;
 import org.tsanet.connector.events.InboundEvent;
 
 /**
- * TSANet Connect push intake. Fast-acks and queues; handling is asynchronous and the
- * reconciliation poller remains the source of truth (docs/decisions.md D4). Signature
- * verified by the filter (D1).
+ * TSANet Connect push intake. Fast-acks and queues; handling is asynchronous and
+ * {@code ReconciliationPoller} is the backstop that makes a dropped event recoverable
+ * rather than lost (docs/decisions.md D4, D16). Signature verified by the filter (D1).
+ *
+ * <p>This endpoint answering 200 on EVERY branch is what makes that backstop necessary:
+ * TSANet treats 4xx as permanent and never retries it, so a 4xx here would guarantee the
+ * loss rather than risk it — and a 200 means no redelivery is coming either.
  *
  * <p>Speaks v2 CloudEvents only (D13). The queued event carries the CloudEvents type
  * as its kind and the case token as its id, which is what the handlers key on.

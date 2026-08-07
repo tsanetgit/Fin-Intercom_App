@@ -30,16 +30,18 @@ import org.tsanet.connector.webhooks.TsanetCloudEvent;
  * platform write then failed would mark the token handled forever, so the claim is
  * removed before the failure propagates. That restores RETRYABILITY.
  *
- * <p><b>But nothing retries yet, and this class must not pretend otherwise.</b> There
- * is no re-drive path in the connector today: the intake answers 200 on every branch
- * so TSANet does not redeliver, this handler catches internally so the drain never
- * re-offers, and there is no reconciliation poller (no {@code @Scheduled} anywhere in
- * the repo). A failed create therefore produces an error-level
- * {@code inbound_ticket_create_failed} audit line and nothing else: recovery is
- * manual, from that line. Releasing the claim is still strictly better than holding
- * it — it means a manual or future automatic retry CAN succeed — but the guarantee is
- * "recoverable", not "recovered". The inbound reconciliation poller
- * (tsanetgit/Member-Integrations#51) is what makes it literal.
+ * <p><b>A failed create is now genuinely recovered, not merely recoverable.</b> The
+ * intake still answers 200 on every branch so TSANet never redelivers, and this handler
+ * still catches internally so the drain never re-offers — but
+ * {@link ReconciliationPoller} re-lists INBOUND cases on a cursor and drives any case
+ * with no link back through this same method. Releasing the claim above is what lets
+ * that second attempt succeed.
+ *
+ * <p>One consequence worth knowing when changing this method: the poller cannot see the
+ * failures caught here, because they return normally. It judges outcome by asking the
+ * link table whether a link now exists. A future edit that swallows a failure WITHOUT
+ * releasing the claim would therefore be invisible to both paths — the token would look
+ * handled forever.
  *
  * <p>Only {@code collaboration-request.created} is claimed here. The other four push
  * types belong to later slices and are left unclaimed, which the drain logs.

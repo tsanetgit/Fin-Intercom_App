@@ -27,6 +27,22 @@ connector:
     # has no default: unset means inbound cases are REFUSED rather than created as the
     # wrong type, and the refusal is an error-level tsanet_audit line.
     collaboration-ticket-type-id: ${INTERCOM_COLLABORATION_TICKET_TYPE_ID:}
+    # Reconciliation poller. Push is a single attempt from our side (intake answers 200
+    # on every branch so TSANet never redelivers), so this is what turns a lost event
+    # into a late case instead of a lost one. ON by default: an operator who never heard
+    # of it should get the recovery, not silently lose it.
+    reconcile-enabled: ${CONNECTOR_RECONCILE_ENABLED:true}
+    # fixedDelay, measured from the END of the previous cycle, so cycles cannot overlap.
+    reconcile-interval-ms: ${CONNECTOR_RECONCILE_INTERVAL_MS:300000}
+    # Lets the app finish booting, and keeps a crash-loop from hammering the list API.
+    reconcile-initial-delay-ms: ${CONNECTOR_RECONCILE_INITIAL_DELAY_MS:60000}
+    # First-run window when there is no stored cursor. The list endpoint has NO
+    # pagination, so this is the only load control; never unbounded.
+    reconcile-lookback: ${CONNECTOR_RECONCILE_LOOKBACK:24h}
+    # Subtracted from the stored cursor every query. updatedAt mixes granularity
+    # (creation sub-second, the server's SLA sweep whole-second) and the filter boundary
+    # is unspecified; a re-listed case is free, a missed one is not.
+    reconcile-overlap: ${CONNECTOR_RECONCILE_OVERLAP:120s}
 
   intercom:
     mode: fake

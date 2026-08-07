@@ -32,7 +32,7 @@ class InboundRequestHandlerTest {
     private final FakeIntercomGateway intercom = new FakeIntercomGateway(new MockEnvironment());
     private final SubmissionLinkTable links = new InMemorySubmissionLinkTable();
     private final InboundRequestHandler handler =
-            new InboundRequestHandler(tsanet, intercom, links, new InboundProperties(TYPE_ID));
+            new InboundRequestHandler(tsanet, intercom, links, InboundProperties.ofTicketType(TYPE_ID));
 
     private static InboundEvent created(String token) {
         return new InboundEvent(InboundEvent.Source.TSANET,
@@ -122,7 +122,7 @@ class InboundRequestHandlerTest {
         assertEquals(0, intercom.createCalls());
 
         InboundRequestHandler unconfigured =
-                new InboundRequestHandler(tsanet, intercom, links, new InboundProperties("  "));
+                new InboundRequestHandler(tsanet, intercom, links, InboundProperties.ofTicketType("  "));
         unconfigured.handle(created("inbound-9"));
         assertEquals(0, intercom.createCalls(),
                 "a missing ticket type must refuse, not create a ticket of the wrong type");

@@ -1,5 +1,7 @@
 package org.tsanet.connector.tsanet.dto;
 
+import java.time.Instant;
+
 /**
  * A collaboration case read back by token — the adapter-facing view of
  * {@code CollaborationRequestStatusDTO}.
@@ -23,7 +25,23 @@ public record InboundCase(
         String description,
         String respondBy,
         String priority,
-        boolean testCase) {
+        boolean testCase,
+        Instant updatedAt) {
+
+    /**
+     * Without an {@code updatedAt}. Only list rows carry that field, so the fixture and
+     * single-case read paths are unchanged by the poller's arrival.
+     *
+     * <p>Appended rather than inserted, and typed {@link Instant} immediately after a
+     * {@code boolean}, so a transposed call cannot compile rather than compiling into a
+     * silently wrong case.
+     */
+    public InboundCase(String token, Direction direction, Status status, String partnerCompany,
+            String summary, String description, String respondBy, String priority,
+            boolean testCase) {
+        this(token, direction, status, partnerCompany, summary, description, respondBy,
+                priority, testCase, null);
+    }
 
     public enum Direction { OUTBOUND, INBOUND, UNKNOWN }
 

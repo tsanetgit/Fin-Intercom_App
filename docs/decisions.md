@@ -469,18 +469,16 @@ every run and no other test in the class.
 
 Consequences, each deliberate:
 
-- **A failed create releases the claim**, which restores retryability. **It does not
-  restore the case**, and this entry must not be read as saying it does. There is no
-  re-drive path in the connector today, verified rather than assumed: the intake
+- **A failed create releases the claim**, which restores retryability — and as of D16
+  that retry actually happens. When this entry was first written it did not: the intake
   answers 200 on every branch so TSANet does not redeliver, the handler catches
-  internally so the drain never re-offers, and there is no reconciliation poller (no
-  `@Scheduled` anywhere in the repo). A failed create therefore leaves an error-level
-  `inbound_ticket_create_failed` audit line carrying the release verdict, and recovery
-  is manual from that line. Releasing is still strictly better than holding — a manual
-  or future automatic retry CAN then succeed — but the guarantee is **recoverable, not
-  recovered**, and the inbound reconciliation poller (#51) is what makes it literal.
-  An earlier draft of this entry argued the trade-off "given the queue redelivers",
-  which was false; the QA round on the slice caught it.
+  internally so the drain never re-offers, and there was no reconciliation poller, so
+  the guarantee was **recoverable, not recovered** and recovery was manual from the
+  error-level `inbound_ticket_create_failed` line. `ReconciliationPoller` now re-lists
+  the case and drives it back through this path, which is what makes releasing the claim
+  load-bearing rather than merely tidy. The audit line remains, because a create that
+  keeps failing still needs a human. An earlier draft of this entry argued the trade-off
+  "given the queue redelivers", which was false; the QA round on the slice caught it.
 - **`releaseClaim` cannot delete an anchored link**, enforced in the SQL `WHERE` clause
   rather than by caller discipline, so misuse degrades to a no-op instead of orphaning
   a live case. The two stores express that guard differently (`ticketAnchored()` versus
@@ -562,6 +560,13 @@ answers twice — but recording it as clean is not. The outbound flow has an UNR
 status for exactly this; inbound has no equivalent yet. Named rather than papered over;
 it lands with the reconciliation poller, which is what can actually resolve it.
 
+**Still open after D16.** The poller now exists, and it does NOT close this: it recovers
+missing TICKETS, not missing state. A case whose response outcome was ambiguous already
+has a link, so the poller's prefilter skips it by design. Resolving the ambiguity needs
+reading the case's status back and reconciling it against `CaseState`, which is the
+status-sync work still blocked on the estate decisions. Named here so this entry is not
+read as closed by the poller's arrival.
+
 **A ticket with several cases currently shows no panel at all.** `byTicketId` refuses a
 multiple match (correctly), `render()` returns empty, and the canvas falls through to
 the outbound partner search — so an agent sees no indication that two partner cases are
@@ -576,3 +581,89 @@ existing contract tests caught it.
 
 Out of scope and deliberately unclaimed: `information-response` (the reply leg, lands
 with notes), notes both directions, closure, and lifecycle sync.
+
+## D16. Reconciliation: re-drive what push dropped, and never advance past a failure
+
+Push is a single attempt from our side. The intake answers 200 on every branch — it has
+to, because TSANet treats `4xx` as permanent and never retries it, so answering 4xx on
+anything transient would guarantee the loss rather than risk it — and the event drain
+catches internally so it never re-offers. Everything between those two was permanently
+lost. `ReconciliationPoller` lists INBOUND cases on an `updatedAt` cursor and drives
+anything with no link back through the same guard-create path.
+
+**Cursoring on `updatedAt` was verified, not assumed.** All 23 cases on BETA have
+`updatedAt` strictly later than `createdAt` — most by exactly 24h, stamped ~10s after
+`respondBy` elapses by a server-side SLA sweep. Read naively that says `updatedAt` only
+moves on modification, which would mean this cursor misses precisely the newly-created
+cases the poller exists to catch, for 24h. So a case was created live: `updatedAt` came
+back EQUAL to `createdAt` to the nanosecond, and a filter set 60s earlier returned it.
+If that ever changes, this decision is what breaks.
+
+**It calls the handler directly and does not use the EventQueue.** The queue is bounded
+and `offer()` drops on full, so a recovery batch could evict live webhook events — the
+poller would cause the loss it exists to repair. The drain is also a single thread shared
+with live intake. Calling `InboundRequestHandler.handle` directly is safe by
+construction: `record()` arbitrates between the poller thread and the drain exactly as it
+arbitrates between two deliveries.
+
+**The cursor advances only after a fully clean cycle**, and only to an `updatedAt` that
+was actually observed. Advancing past a case that failed to become a ticket loses it
+permanently, which is the worst outcome available here. There is no partial advance to
+"newest handled" — that is only sound if rows are ordered by `updatedAt`, which is
+unspecified. An empty window advances nothing: moving to `now` would step over any case
+whose `updatedAt` lands between the query and the write. A wedged cursor degrades safely
+— new cases still arrive each cycle because the window extends to now — so the cost is a
+widening query and loud logs, never lost work.
+
+**Success is judged by an ANCHORED link, not by a row existing.** `byToken()` is true for
+a bare claim as well as a finished ticket, and the handler returns normally when it LOSES
+the `record()` race to the live drain. Counting that as success let the cursor advance
+past a case whose create then failed and released the claim — leaving it with no link,
+outside the window, unrecoverable: the exact loss this entry forbids, produced by the
+rule meant to prevent it (#22 QA). An unanchored row is now read as IN FLIGHT: not a
+failure, so it does not touch the failure counter and does not use the dirty-cycle line —
+it emits its own `reconcile_cycle_held` at warn — but the cursor holds, because an unknown
+outcome is not one to advance past.
+
+**An orphaned claim therefore wedges the cursor until someone intervenes.** A crash
+between `record()` and `anchor()` leaves an unanchored row that no longer has a thread
+behind it, and every subsequent cycle reads it as in-flight and holds. That is
+deliberately preferred to the alternative — advancing past it is the silent permanent loss
+this entry exists to prevent — and it is loud rather than silent: a `reconcile_cycle_held`
+line every cycle, naming the token. But it does NOT self-heal, and `consecutiveFailures`
+stays at zero because nothing failed, so an alert keyed on that counter will not fire.
+Claims have no expiry today; an age-based reclaim is the follow-up
+(`tsanetgit/Fin-Intercom_App#26`).
+
+**The cursor is persisted BEFORE the cycle is declared healthy.** The store throws on a
+SQL failure by design, refusing to hide a broken volume (D12). The first version reset
+the failure counter and then persisted outside any try, so on a broken volume every cycle
+reported a healthy counter, never reached the clean audit line, and let the exception
+escape into the scheduler's handler in non-audit format — the store promised loudness and
+the caller undid it, in exactly the D12 failure mode this was supposed to cover (#22 QA).
+
+**Success is judged by outcome, not by absence of an exception.** `InboundRequestHandler`
+catches its own create failures, because the drain shares it and an escaping exception
+would kill that thread — so a failed create returns NORMALLY. The first version of the
+cycle counted that as success and advanced the cursor over a case that never became a
+ticket; the test caught it. The poller now asks the link table whether a link exists,
+which is the only honest witness.
+
+**The cursor is durable but the link table's durability matters more.** A lost cursor
+costs one wider re-scan, absorbed by the prefilter; lost links orphan every open case.
+That asymmetry is why `PollerStateStore` is allowed an in-memory implementation under
+prod while the link table is not. It lives in its own table on the same SQLite file: one
+volume, and a cursor that cannot outlive the links it is a cursor over.
+
+**Bounded windows, deliberately.** The list endpoint has NO pagination, so window size is
+the only load control: a first run asks for `now - 24h`, never epoch. A 120s overlap is
+subtracted from the stored cursor on every query, absorbing the mixed granularity of
+`updatedAt` (creation sub-second, SLA sweep whole-second) and the unspecified
+inclusive/exclusive boundary. Re-listing is free; missing one is not.
+
+**Single instance only.** Two containers would race the cursor. They could not create
+duplicate tickets — the token's unique constraint still arbitrates — but they would
+duplicate the work and fight over the mark.
+
+Out of scope and deliberately unclaimed: status sync, notes, and closure. This slice
+recovers missing tickets and nothing else.
