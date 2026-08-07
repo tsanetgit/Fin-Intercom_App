@@ -147,7 +147,13 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
 
     @Override
     public void anchor(String token, String ticketId) {
-        if (token == null || ticketId == null) {
+        if (token == null || ticketId == null || ticketId.isBlank()) {
+            return; // a blank id is not an anchor; see the interface javadoc
+        }
+        Entry existing = byToken.get(token);
+        if (existing != null && existing.link().ticketAnchored()) {
+            log.error("tsanet_audit event=anchor_rejected_already_set token={} existing={} offered={}",
+                    token, existing.link().ticketId(), ticketId);
             return;
         }
         if (!byToken.containsKey(token)) {

@@ -27,12 +27,19 @@ import org.tsanet.connector.webhooks.TsanetCloudEvent;
  * only the winner creates. A loser does nothing at all.
  *
  * <p><b>Why the claim is released on failure.</b> A claim held by a caller whose
- * platform write then failed would mark the token handled forever, and no redelivery
- * could ever produce the ticket. The claim is therefore removed before the failure
- * propagates, which trades a duplicate-ticket risk under a pathological interleaving
- * for the certainty of never silently losing a partner's case. Given the queue
- * redelivers and a lost case is invisible while a duplicate is not, that is the right
- * way round.
+ * platform write then failed would mark the token handled forever, so the claim is
+ * removed before the failure propagates. That restores RETRYABILITY.
+ *
+ * <p><b>But nothing retries yet, and this class must not pretend otherwise.</b> There
+ * is no re-drive path in the connector today: the intake answers 200 on every branch
+ * so TSANet does not redeliver, this handler catches internally so the drain never
+ * re-offers, and there is no reconciliation poller (no {@code @Scheduled} anywhere in
+ * the repo). A failed create therefore produces an error-level
+ * {@code inbound_ticket_create_failed} audit line and nothing else: recovery is
+ * manual, from that line. Releasing the claim is still strictly better than holding
+ * it — it means a manual or future automatic retry CAN succeed — but the guarantee is
+ * "recoverable", not "recovered". The inbound reconciliation poller
+ * (tsanetgit/Member-Integrations#51) is what makes it literal.
  *
  * <p>Only {@code collaboration-request.created} is claimed here. The other four push
  * types belong to later slices and are left unclaimed, which the drain logs.
@@ -84,13 +91,22 @@ public class InboundRequestHandler implements InboundEventHandler {
         try {
             inboundCase = tsanet.fetchByToken(token).orElse(null);
         } catch (GatewayException e) {
-            // Includes the ambiguous case. Nothing is claimed yet, so redelivery or the
-            // reconciliation poller retries cleanly.
+            // Includes the ambiguous case. Nothing is claimed yet, so the token stays
+            // free for a retry — but see the class javadoc: no automatic re-drive
+            // exists yet, so this line is the recovery surface.
             log.warn("tsanet_audit event=inbound_fetch_failed token={} reason={}", token, e.getMessage());
             return;
         }
         if (inboundCase == null) {
             log.warn("tsanet_audit event=inbound_case_absent token={}", token);
+            return;
+        }
+        if (inboundCase.direction() == InboundCase.Direction.UNKNOWN) {
+            // Wire drift, not a routine skip: a partner case is being dropped on the
+            // floor. Logged separately and at error so it cannot hide in the OUTBOUND
+            // volume, which is normal and constant.
+            log.error("tsanet_audit event=inbound_unknown_direction token={}"
+                    + " reason=case_not_created", token);
             return;
         }
         if (!inboundCase.inbound()) {
@@ -118,9 +134,12 @@ public class InboundRequestHandler implements InboundEventHandler {
         } catch (RuntimeException e) {
             // IntercomException and anything else the write throws: a claim held by a
             // failed create must not outlive it.
-            links.releaseClaim(token);
+            // Log the verdict rather than asserting it: this line is the recovery
+            // surface, and "claim=false" is the tripwire for a claim that could not be
+            // released — which would mean redelivery can never create the ticket.
+            boolean released = links.releaseClaim(token);
             log.error("tsanet_audit event=inbound_ticket_create_failed token={} reason={}"
-                    + " claim=released", token, e.getMessage());
+                    + " claim_released={}", token, e.getMessage(), released);
             return;
         }
 

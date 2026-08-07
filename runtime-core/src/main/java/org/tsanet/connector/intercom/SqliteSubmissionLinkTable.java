@@ -236,12 +236,15 @@ public class SqliteSubmissionLinkTable implements SubmissionLinkTable {
 
     @Override
     public void anchor(String token, String ticketId) {
-        if (token == null || ticketId == null) {
-            return;
+        if (token == null || ticketId == null || ticketId.isBlank()) {
+            return; // a blank id is not an anchor; see the interface javadoc
         }
+        // Write-once in the WHERE clause, the same way releaseClaim's guard is: the
+        // database refuses to re-point a live case rather than the caller remembering
+        // not to ask.
         try (Connection c = dataSource.getConnection();
                 PreparedStatement ps = c.prepareStatement(
-                        "UPDATE submission_link SET ticket_id = ? WHERE token = ?")) {
+                        "UPDATE submission_link SET ticket_id = ? WHERE token = ? AND ticket_id IS NULL")) {
             ps.setString(1, ticketId);
             ps.setString(2, token);
             if (ps.executeUpdate() == 0) {

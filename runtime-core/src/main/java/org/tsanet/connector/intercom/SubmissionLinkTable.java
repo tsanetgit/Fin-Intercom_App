@@ -85,6 +85,16 @@ public interface SubmissionLinkTable {
      * has been created. Separate from {@link #record} because record() is
      * first-write-wins: a claim is taken before the ticket exists, so the anchor
      * cannot be part of the insert and re-recording would be ignored.
+     *
+     * <p>Write-once, and a BLANK id is not an anchor. Both rules exist because
+     * {@link #releaseClaim} decides on "is this link anchored": if a blank id could be
+     * stored, the two stores would disagree about whether such a link may be released
+     * (the map store asks {@code ticketAnchored()}, the SQL store asks
+     * {@code ticket_id IS NULL}), and the SQL store — the one that runs in prod —
+     * would refuse to release it, so redelivery would find the token claimed forever
+     * and no ticket would ever be created. Guarding at this choke point makes the two
+     * predicates agree by construction rather than by matching wording. Re-pointing an
+     * existing anchor is likewise refused: it would silently move a live case.
      */
     void anchor(String token, String ticketId);
 

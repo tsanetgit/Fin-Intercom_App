@@ -157,6 +157,29 @@ public abstract class SubmissionLinkTableContractTest {
     }
 
     @Test
+    void aBlankAnchorIsNotAnAnchorAndAnchoringIsWriteOnce() {
+        // Both rules exist so releaseClaim's guard means the same thing in both
+        // stores. A stored blank id made them disagree: the map store would release
+        // such a link and the SQL store would refuse, so in prod the token stayed
+        // claimed forever and no ticket was ever created — the exact silent loss
+        // releaseClaim exists to prevent.
+        assertTrue(table().record(new SubmissionLink("TSA-blank", "inbound:TSA-blank",
+                null, null, null, "NetApp", null, true, null, java.time.Instant.now())));
+        table().anchor("TSA-blank", "   ");
+        assertNull(table().byToken("TSA-blank").orElseThrow().ticketId(),
+                "a blank id must not be stored as an anchor");
+        assertTrue(table().releaseClaim("TSA-blank"),
+                "and the link must still be releasable, in EVERY store");
+
+        assertTrue(table().record(new SubmissionLink("TSA-once", "inbound:TSA-once",
+                null, null, null, "NetApp", null, true, null, java.time.Instant.now())));
+        table().anchor("TSA-once", "tkt-first");
+        table().anchor("TSA-once", "tkt-second");
+        assertEquals("tkt-first", table().byToken("TSA-once").orElseThrow().ticketId(),
+                "re-pointing an anchored link would silently move a live case");
+    }
+
+    @Test
     void absentKeysAnswerEmpty() {
         table().record(link("TSA-4", "flow-4", "conv-4"));
         assertTrue(table().byToken("nope").isEmpty());

@@ -469,13 +469,27 @@ every run and no other test in the class.
 
 Consequences, each deliberate:
 
-- **A failed create releases the claim.** A claim outliving its failed write would mark
-  the token handled forever and no redelivery could ever produce the ticket. Releasing
-  trades a duplicate-ticket risk under a pathological interleaving for the certainty of
-  never silently losing a partner's case — a duplicate is visible, a lost case is not.
+- **A failed create releases the claim**, which restores retryability. **It does not
+  restore the case**, and this entry must not be read as saying it does. There is no
+  re-drive path in the connector today, verified rather than assumed: the intake
+  answers 200 on every branch so TSANet does not redeliver, the handler catches
+  internally so the drain never re-offers, and there is no reconciliation poller (no
+  `@Scheduled` anywhere in the repo). A failed create therefore leaves an error-level
+  `inbound_ticket_create_failed` audit line carrying the release verdict, and recovery
+  is manual from that line. Releasing is still strictly better than holding — a manual
+  or future automatic retry CAN then succeed — but the guarantee is **recoverable, not
+  recovered**, and the inbound reconciliation poller (#51) is what makes it literal.
+  An earlier draft of this entry argued the trade-off "given the queue redelivers",
+  which was false; the QA round on the slice caught it.
 - **`releaseClaim` cannot delete an anchored link**, enforced in the SQL `WHERE` clause
   rather than by caller discipline, so misuse degrades to a no-op instead of orphaning
-  a live case.
+  a live case. The two stores express that guard differently (`ticketAnchored()` versus
+  `ticket_id IS NULL`), which made them disagree about a link anchored with a BLANK id:
+  the map store released it, the SQL store refused. In prod that means the token stays
+  claimed forever and no ticket is ever created — the silent loss the release exists to
+  prevent, in the store that actually runs. Fixed at the choke point instead of by
+  reconciling two predicates: `anchor()` refuses a blank id (and is write-once) in both
+  stores, so the guards agree by construction. Pinned by a contract case.
 - **Direction is checked before anything is claimed.** Push fires for cases in both
   directions; a case we submitted already has its anchor, and unrecognised direction
   values map to UNKNOWN rather than a guess, since a wrong guess creates a wrong ticket.
