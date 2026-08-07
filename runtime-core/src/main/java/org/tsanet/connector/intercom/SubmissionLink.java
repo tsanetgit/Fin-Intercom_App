@@ -21,7 +21,19 @@ public record SubmissionLink(
         String respondBy,
         boolean testCase,
         String submittedBy,
-        Instant submittedAt) {
+        Instant submittedAt,
+        /** The case number quoted to the partner on accept; null until then. Stored
+         * rather than re-derived so the value we actually sent survives a change of
+         * convention about which platform identifier fills it. */
+        String caseNumber) {
+
+    /** Pre-caseNumber convenience for the outbound path, which never quotes one. */
+    public SubmissionLink(String token, String internalCaseNumber, String workspaceId,
+            String conversationId, String ticketId, String partnerDisplay, String respondBy,
+            boolean testCase, String submittedBy, Instant submittedAt) {
+        this(token, internalCaseNumber, workspaceId, conversationId, ticketId, partnerDisplay,
+                respondBy, testCase, submittedBy, submittedAt, null);
+    }
 
     public boolean ticketAnchored() {
         return ticketId != null && !ticketId.isBlank();

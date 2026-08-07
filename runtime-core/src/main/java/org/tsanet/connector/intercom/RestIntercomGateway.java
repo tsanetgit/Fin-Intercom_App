@@ -207,7 +207,7 @@ public class RestIntercomGateway implements IntercomGateway {
     static final String SYNTHETIC_CONTACT_EMAIL = "tsanet-partner@example.invalid";
 
     @Override
-    public String createCollaborationTicket(InboundTicketRequest request) {
+    public CreatedTicket createCollaborationTicket(InboundTicketRequest request) {
         String contactId = syntheticContactId();
         Map<String, Object> attrs = new LinkedHashMap<>();
         attrs.put("_default_title_", title(request));
@@ -237,9 +237,14 @@ public class RestIntercomGateway implements IntercomGateway {
         }
         String ticketId = String.valueOf(id);
         verifyTokenLanded(ticketId, request.token());
-        log.info("tsanet_audit event=inbound_ticket_created ticket={} token={} partner={} test={}",
-                ticketId, request.token(), request.partnerCompany(), request.testCase());
-        return ticketId;
+        // The agent-facing number, captured HERE because it is only in the create
+        // response and a later read would cost a round trip. Absent means we quote
+        // nothing rather than quoting the API handle, which no agent can search.
+        Object number = created.get("ticket_id");
+        log.info("tsanet_audit event=inbound_ticket_created ticket={} number={} token={}"
+                        + " partner={} test={}",
+                ticketId, number, request.token(), request.partnerCompany(), request.testCase());
+        return new CreatedTicket(ticketId, number == null ? null : String.valueOf(number));
     }
 
     /** A test case must be unmistakable on the agent's screen, not just in an attribute. */

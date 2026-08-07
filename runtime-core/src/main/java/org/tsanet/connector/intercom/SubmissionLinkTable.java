@@ -98,5 +98,39 @@ public interface SubmissionLinkTable {
      */
     void anchor(String token, String ticketId);
 
+    /**
+     * The link anchored to this platform ticket, or empty.
+     *
+     * <p>The reverse of {@link #byToken}: an agent acting in a panel knows the ticket
+     * they are looking at, not the case token.
+     *
+     * <p><b>Empty means "not routable", and that covers ZERO or SEVERAL matches.</b>
+     * Several cases can legitimately share one ticket — an agent may escalate a single
+     * customer problem to two partners — so this refuses rather than picking, because
+     * answering the wrong one answers the wrong partner. Do not add a unique index on
+     * {@code ticket_id} to make this simpler: that was tried, it breaks multi-partner
+     * escalation, and the contract tests caught it (D15). Callers treat empty as
+     * not-routable and must not assume a single match exists.
+     */
+    Optional<SubmissionLink> byTicketId(String ticketId);
+
+    /** Never null: {@link CaseState#PENDING} for an unset, unknown, or null token. */
+    CaseState caseState(String token);
+
+    /**
+     * Moves the case state, but only from {@code expected}, and reports whether the
+     * move happened.
+     *
+     * <p>Compare-and-set rather than a plain setter for the same reason
+     * {@link #record} returns a verdict: two panels open on one ticket must not both
+     * be able to respond to the partner. The loser sees false and re-renders the state
+     * that actually holds.
+     */
+    boolean caseState(String token, CaseState expected, CaseState next);
+
+    /** Records the case number sent to the partner, so the value we quoted survives
+     * independently of whatever convention produced it. */
+    void caseNumber(String token, String caseNumber);
+
     int size();
 }

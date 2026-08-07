@@ -2,6 +2,7 @@ package org.tsanet.connector.tsanet;
 
 import java.util.List;
 import java.util.Optional;
+import org.tsanet.connector.tsanet.dto.EngineerIdentity;
 import org.tsanet.connector.tsanet.dto.InboundCase;
 import org.tsanet.connector.tsanet.dto.PartnerHit;
 import org.tsanet.connector.tsanet.dto.ProcessForm;
@@ -70,4 +71,23 @@ public interface TsanetGateway {
      * such case", because a handler would then treat a live partner case as absent.
      */
     Optional<InboundCase> fetchByToken(String token);
+
+    /**
+     * Accepts a partner's case. {@code caseNumber} is OUR reference, which the partner
+     * quotes back, so it must be an identifier our agents can actually search.
+     *
+     * <p>All three response actions share a failure contract with the rest of this
+     * interface: a definitive rejection is {@link GatewayException} and anything
+     * ambiguous is {@link GatewayTimeoutException}. The email-domain rule is the
+     * canonical definitive case — no status code conveys it, so the message carries
+     * the API's validated problem+json detail and the panel renders it beside the
+     * email field.
+     */
+    void approve(String token, EngineerIdentity engineer, String caseNumber, String nextSteps);
+
+    /** Declines a partner's case, with a reason the partner reads. */
+    void reject(String token, EngineerIdentity engineer, String reason);
+
+    /** Asks the partner for more before deciding. */
+    void requestInformation(String token, EngineerIdentity engineer, String requestedInformation);
 }

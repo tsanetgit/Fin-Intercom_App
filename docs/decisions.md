@@ -502,3 +502,77 @@ Consequences, each deliberate:
 
 Only `collaboration-request.created` is claimed. The other four push types belong to
 later slices and are deliberately left unclaimed, which the drain logs.
+
+## D15. Answering a partner: state first, then the API, and ambiguity means ambiguity
+
+The three response actions (Accept / Decline / Request information) are agent-driven
+writes the PARTNER sees, so they inherit every rule submit has.
+
+**The panel renders from recorded state, not from what was clicked.** The link carries
+a `CaseState`, and a response moves it by compare-and-set BEFORE calling the API. Two
+panels open on one ticket cannot both answer: the loser sees the guard fail and
+re-renders what actually holds. Answered cases offer no buttons.
+
+**Failure handling follows the state, not the other way round.** A definitive
+rejection gives the state back (the agent fixes and retries); an ambiguous outcome
+keeps the state moved and says the result is unknown, because re-offering the action
+is precisely what would answer a partner twice.
+
+**A 5xx on a response action is ambiguous — and was not.** The gateway's ambiguity
+rule was gated on `op.equals("submit")`, so a 500 on approve surfaced as a plain
+`GatewayException`, which the panel reads as definitively rejected: state given back,
+agent invited to answer a partner who may already have been answered. Caught by the
+response-action probe, not by review. The gate is now a `MUTATING_OPS` set covering
+every operation the partner can see. **Any future partner-visible write must be added
+to that set**, and the reason it is a set rather than a boolean on the call site is so
+that omission is visible in one place.
+
+**The engineer identity is prefilled and editable.** The API rejects an address off
+the member's registered domain, no status code conveys that, and the connector cannot
+know the registered domains — the validated problem+json `detail` is the only source.
+So the acting teammate is a default, not a lock, and the rejection renders beside the
+email field with the typed values preserved: one correction and a resubmit.
+
+**`caseNumber` is the ticket number, not the ticket id.** Probed live: an Intercom
+ticket carries `id` (`215475361003303`, the API handle) and `ticket_id`
+(`121556608`, the `#`-number an agent sees and can search). The partner quotes our
+case number back, so it must be the searchable one.
+
+The number is captured at ticket-create time, from the create response, and recorded
+on the link — it is not re-derived later and never defaults to the anchor. **The first
+version of this shipped the decision in prose and the defect in code**: the panel fell
+back to `link.ticketId()`, which holds the handle, and the test asserted that value, so
+the suite was green on exactly the property this entry exists to protect (#17 QA
+round). Accept now REFUSES when no searchable number was captured, because quoting the
+handle fails silently — on a phone call, days later — while refusing is recoverable.
+
+That refusal has one permanent case. A row created before `case_number` existed is
+migrated with it NULL, the number is only ever captured at ticket-create time, and
+nothing backfills it — so accept is refused on that row forever, with no recovery short
+of manual intervention. It is fail-safe and the message says so, and the real population
+is approximately zero because inbound create itself only landed one slice earlier.
+Recorded rather than fixed: a backfill needs a ticket read per orphaned row, which
+belongs with the reconciliation poller if it is ever worth doing (#17 QA round 2).
+
+**Ambiguity is durable for outbound and transient here, and that asymmetry is a known
+gap.** An ambiguous response tells the agent the outcome is unknown, but the recorded
+state has already moved, so a later render (second agent, second tab, after a restart)
+shows a cleanly answered case. Keeping the state moved is right — re-offering is what
+answers twice — but recording it as clean is not. The outbound flow has an UNRESOLVED
+status for exactly this; inbound has no equivalent yet. Named rather than papered over;
+it lands with the reconciliation poller, which is what can actually resolve it.
+
+**A ticket with several cases currently shows no panel at all.** `byTicketId` refuses a
+multiple match (correctly), `render()` returns empty, and the canvas falls through to
+the outbound partner search — so an agent sees no indication that two partner cases are
+attached and cannot answer either. Refusing to pick is right; rendering nothing is the
+gap. A "this ticket has N collaboration cases" panel fits the existing shape and is the
+follow-up.
+
+**One ticket can anchor several cases**, so `byTicketId` refuses a multiple match
+instead of picking. An agent may escalate one customer problem to two partners; a
+unique index on `ticket_id` looked correct and would have made that impossible — the
+existing contract tests caught it.
+
+Out of scope and deliberately unclaimed: `information-response` (the reply leg, lands
+with notes), notes both directions, closure, and lifecycle sync.

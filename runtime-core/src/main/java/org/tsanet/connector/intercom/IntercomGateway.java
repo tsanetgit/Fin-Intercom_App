@@ -36,7 +36,19 @@ public interface IntercomGateway {
      * its claim on that, so a redelivery can retry cleanly rather than the token
      * being permanently marked as handled.
      */
-    String createCollaborationTicket(InboundTicketRequest request);
+    CreatedTicket createCollaborationTicket(InboundTicketRequest request);
+
+    /**
+     * The two identifiers an Intercom ticket carries, which are NOT interchangeable.
+     *
+     * @param id the API handle (e.g. 215475361003303) — what every /tickets/ call and
+     *     canvas payload uses, and what the link anchors on
+     * @param number the agent-facing number (e.g. 121556608, shown as "#121556608") —
+     *     the ONLY one searchable in the Help Desk, and therefore the only one that can
+     *     be quoted to a partner as our case number
+     */
+    record CreatedTicket(String id, String number) {
+    }
 
     /** Cheap credential/reachability probe (GET /me). */
     boolean healthy();

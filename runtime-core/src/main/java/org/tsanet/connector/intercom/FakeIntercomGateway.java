@@ -54,13 +54,14 @@ public class FakeIntercomGateway implements IntercomGateway {
     }
 
     private final Map<String, String> ticketsByToken = new ConcurrentHashMap<>();
+    private final Map<String, String> numbersByToken = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger createCalls =
             new java.util.concurrent.atomic.AtomicInteger();
     /** Set to make the next create throw, so the handler's claim-release path is testable. */
     public volatile boolean failNextCreate;
 
     @Override
-    public String createCollaborationTicket(InboundTicketRequest request) {
+    public CreatedTicket createCollaborationTicket(InboundTicketRequest request) {
         createCalls.incrementAndGet();
         if (failNextCreate) {
             failNextCreate = false;
@@ -69,14 +70,22 @@ public class FakeIntercomGateway implements IntercomGateway {
         // Deliberately NOT idempotent on the token: the contract puts idempotency in
         // the caller's claim, and a fake that quietly de-duplicated would hide a
         // handler that creates twice.
-        String ticketId = "tkt-" + ticketsByToken.size() + "-" + request.token();
+        // Deliberately unlike each other: a fake whose two ids were interchangeable
+        // would let a test assert the wrong one and pass (#17 QA round).
+        String ticketId = "api-" + ticketsByToken.size() + "-" + request.token();
+        String number = "9900" + ticketsByToken.size();
         ticketsByToken.put(request.token(), ticketId);
-        return ticketId;
+        numbersByToken.put(request.token(), number);
+        return new CreatedTicket(ticketId, number);
     }
 
     /** How many times a ticket create was attempted — the duplicate-ticket probe. */
     public int createCalls() {
         return createCalls.get();
+    }
+
+    public Map<String, String> numbersByToken() {
+        return Map.copyOf(numbersByToken);
     }
 
     public Map<String, String> ticketsByToken() {

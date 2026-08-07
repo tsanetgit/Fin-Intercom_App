@@ -127,9 +127,9 @@ public class InboundRequestHandler implements InboundEventHandler {
             return;
         }
 
-        String ticketId;
+        IntercomGateway.CreatedTicket created;
         try {
-            ticketId = intercom.createCollaborationTicket(
+            created = intercom.createCollaborationTicket(
                     InboundTicketRequest.from(inboundCase, ticketTypeId));
         } catch (RuntimeException e) {
             // IntercomException and anything else the write throws: a claim held by a
@@ -145,8 +145,13 @@ public class InboundRequestHandler implements InboundEventHandler {
 
         // record() is first-write-wins, so the anchor cannot be added by re-recording;
         // the table's own updater is what carries it.
-        links.anchor(token, ticketId);
-        log.info("tsanet_audit event=inbound_linked token={} ticket={} partner={}",
-                token, ticketId, inboundCase.partnerCompany());
+        links.anchor(token, created.id());
+        // The case number is captured NOW, from the create response, because it is the
+        // agent-searchable number rather than the API handle the link anchors on. D15
+        // says the partner must be quoted a reference our agents can look up, and the
+        // handle is not one — the #17 QA round found the panel quoting it.
+        links.caseNumber(token, created.number());
+        log.info("tsanet_audit event=inbound_linked token={} ticket={} number={} partner={}",
+                token, created.id(), created.number(), inboundCase.partnerCompany());
     }
 }
