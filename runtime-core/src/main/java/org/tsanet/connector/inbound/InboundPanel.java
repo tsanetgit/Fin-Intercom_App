@@ -168,6 +168,18 @@ public class InboundPanel {
                     "Missing required: " + String.join(", ", missing));
         }
 
+        if (ACCEPT.equals(action) && blank(link.caseNumber())) {
+            // Falling back to the ticket's API handle here is exactly the defect D15
+            // was written to prevent: the partner would quote back a number no agent
+            // can search. Refusing is recoverable; quoting the wrong one is not
+            // visible until someone is on the phone.
+            log.error("tsanet_audit event=inbound_accept_blocked token={} reason=no_case_number",
+                    link.token());
+            return statusCanvas(link, "This case has no searchable case number recorded, so it"
+                    + " cannot be accepted yet. The number is captured when the ticket is created;"
+                    + " raise this with support rather than retrying.");
+        }
+
         CaseState next = stateFor(action);
         // Claim the transition BEFORE calling the partner: two panels open on one
         // ticket must not both answer, and the loser re-renders what holds.
@@ -178,11 +190,7 @@ public class InboundPanel {
         }
         try {
             switch (action) {
-                case ACCEPT -> {
-                    String caseNumber = link.caseNumber() == null ? link.ticketId() : link.caseNumber();
-                    tsanet.approve(link.token(), engineer, caseNumber, text);
-                    links.caseNumber(link.token(), caseNumber);
-                }
+                case ACCEPT -> tsanet.approve(link.token(), engineer, link.caseNumber(), text);
                 case REJECT -> tsanet.reject(link.token(), engineer, text);
                 default -> tsanet.requestInformation(link.token(), engineer, text);
             }

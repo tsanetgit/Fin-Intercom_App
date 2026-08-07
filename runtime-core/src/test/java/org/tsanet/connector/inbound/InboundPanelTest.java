@@ -24,13 +24,19 @@ class InboundPanelTest {
     private final InboundPanel panel = new InboundPanel(links, tsanet);
 
     private static final String TOKEN = "inbound-77";
+    /** The API handle: what the link anchors on and what canvas payloads carry. */
     private static final String TICKET = "215475361003303";
+    /** The agent-facing number: the ONLY thing that may be quoted to a partner.
+     * Deliberately unlike TICKET — an earlier version of this test used one value for
+     * both and so asserted the defect it was meant to catch (#17 QA round). */
+    private static final String TICKET_NUMBER = "121556608";
 
     @BeforeEach
     void anchorAnInboundCase() {
         links.record(new SubmissionLink(TOKEN, InboundRequestHandler.INBOUND_INTERNAL_PREFIX + TOKEN,
                 "w1", null, null, "NetApp", "2026-08-08T12:00:00Z", true, null, Instant.now()));
         links.anchor(TOKEN, TICKET);
+        links.caseNumber(TOKEN, TICKET_NUMBER);
     }
 
     private static Map<String, Object> onTicket(String ticketId) {
@@ -89,12 +95,31 @@ class InboundPanelTest {
 
         FakeTsanetGateway.Responded sent = tsanet.responses().get(0);
         assertEquals("approve", sent.action());
-        assertEquals(TICKET, sent.caseNumber(),
-                "the partner quotes this back; it must be the id our agents can look up");
+        assertEquals(TICKET_NUMBER, sent.caseNumber(),
+                "the partner quotes this back, so it must be the SEARCHABLE number, never the"
+                        + " API handle the link anchors on");
         assertEquals("dana@member.example", sent.engineer().email());
         assertEquals(CaseState.ACCEPTED, links.caseState(TOKEN));
-        assertEquals(TICKET, links.byToken(TOKEN).orElseThrow().caseNumber(),
+        assertEquals(TICKET_NUMBER, links.byToken(TOKEN).orElseThrow().caseNumber(),
                 "what we quoted is recorded, not re-derived later");
+    }
+
+    @Test
+    void acceptIsRefusedRatherThanQuotingTheApiHandle() {
+        // If the searchable number was never captured, falling back to the anchor would
+        // quote the partner a reference no agent can find — which fails silently, on a
+        // phone call, days later. Refusing is recoverable; quoting the handle is not.
+        links.record(new SubmissionLink("inbound-nonum",
+                InboundRequestHandler.INBOUND_INTERNAL_PREFIX + "inbound-nonum", "w1", null, null,
+                "NetApp", null, true, null, Instant.now()));
+        links.anchor("inbound-nonum", "api-handle-only");
+
+        String rendered = text(panel.submit(onTicket("api-handle-only"), InboundPanel.SUBMIT_ACCEPT,
+                Map.of(InboundPanel.FIELD_TEXT, "on it")).orElseThrow());
+
+        assertTrue(rendered.contains("searchable case number"));
+        assertTrue(tsanet.responses().isEmpty(), "nothing may reach the partner");
+        assertEquals(CaseState.PENDING, links.caseState("inbound-nonum"));
     }
 
     @Test
@@ -153,6 +178,7 @@ class InboundPanelTest {
                 InboundRequestHandler.INBOUND_INTERNAL_PREFIX + "timeout-9", "w1", null, null,
                 "NetApp", null, true, null, Instant.now()));
         links.anchor("timeout-9", "ticket-timeout");
+        links.caseNumber("timeout-9", "9900777");
 
         String rendered = text(panel.submit(onTicket("ticket-timeout"), InboundPanel.SUBMIT_INFO,
                 Map.of(InboundPanel.FIELD_TEXT, "which array?")).orElseThrow());

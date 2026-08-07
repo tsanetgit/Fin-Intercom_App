@@ -102,9 +102,15 @@ public interface SubmissionLinkTable {
      * The link anchored to this platform ticket, or empty.
      *
      * <p>The reverse of {@link #byToken}: an agent acting in a panel knows the ticket
-     * they are looking at, not the case token. Unique by construction — the inbound
-     * slice guarantees one ticket per case — which is what lets a response flow key
-     * its transition guard on the row it finds here.
+     * they are looking at, not the case token.
+     *
+     * <p><b>Empty means "not routable", and that covers ZERO or SEVERAL matches.</b>
+     * Several cases can legitimately share one ticket — an agent may escalate a single
+     * customer problem to two partners — so this refuses rather than picking, because
+     * answering the wrong one answers the wrong partner. Do not add a unique index on
+     * {@code ticket_id} to make this simpler: that was tried, it breaks multi-partner
+     * escalation, and the contract tests caught it (D15). Callers treat empty as
+     * not-routable and must not assume a single match exists.
      */
     Optional<SubmissionLink> byTicketId(String ticketId);
 

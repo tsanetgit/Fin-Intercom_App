@@ -12,6 +12,9 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Optional;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
@@ -119,12 +122,55 @@ public class SqliteSubmissionLinkTable implements SubmissionLinkTable {
         log.info("submission link table: sqlite at {} ({} links)", file, size());
     }
 
+    /**
+     * Columns added after the first shipped schema, in the order they arrived. SQLite
+     * allows NOT NULL on an added column only with a constant default, which is why
+     * case_state carries one; existing outbound rows becoming PENDING is harmless
+     * because the state only governs inbound response flows.
+     */
+    private static final Map<String, String> EVOLVED_COLUMNS = new LinkedHashMap<>(Map.of(
+            "case_state", "TEXT NOT NULL DEFAULT 'PENDING'",
+            "case_number", "TEXT"));
+
+    /**
+     * Creates the table on a fresh file, and EVOLVES one that already exists.
+     *
+     * <p>The evolution half is not optional here. {@code CREATE TABLE IF NOT EXISTS} is
+     * a no-op against an existing table, and D11/D12 require this file to live on
+     * storage that outlives the container — so upgrading an existing database is the
+     * NORMAL restart, not an edge case. Without this, a new column turns every
+     * operation into "no such column" while the connector still boots healthy and even
+     * logs a correct link count, because size() touches only old columns. That is
+     * worse than the volatile store the durable one replaced, and silent at the one
+     * moment somebody is watching (#17 QA round).
+     *
+     * <p>Construction ends by selecting every column, so a schema that is still wrong
+     * fails at deploy instead of poisoning writes later. That is D11's own standard —
+     * fail where someone is looking — applied to schema rather than storage.
+     */
     private void initialize() {
         try (Connection c = dataSource.getConnection(); Statement s = c.createStatement()) {
             s.executeUpdate(DDL);
+            Set<String> present = new java.util.HashSet<>();
+            try (ResultSet rs = s.executeQuery("SELECT name FROM pragma_table_info('submission_link')")) {
+                while (rs.next()) {
+                    present.add(rs.getString(1));
+                }
+            }
+            for (Map.Entry<String, String> column : EVOLVED_COLUMNS.entrySet()) {
+                if (!present.contains(column.getKey())) {
+                    log.info("submission link table: adding column {}", column.getKey());
+                    s.executeUpdate("ALTER TABLE submission_link ADD COLUMN "
+                            + column.getKey() + " " + column.getValue());
+                }
+            }
             s.executeUpdate(INDEX_INTERNAL);
             s.executeUpdate(INDEX_CONVERSATION);
             s.executeUpdate(INDEX_TICKET);
+            // Fail loudly rather than at the first write: touch every column the code
+            // will use, including the ones not in COLUMNS.
+            s.executeQuery("SELECT " + COLUMNS + ", annotation_state, case_state"
+                    + " FROM submission_link LIMIT 1").close();
         } catch (SQLException e) {
             throw new IllegalStateException("cannot initialize the submission link table", e);
         }

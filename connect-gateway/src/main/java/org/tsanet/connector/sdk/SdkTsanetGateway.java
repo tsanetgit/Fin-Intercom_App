@@ -581,18 +581,18 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
      * untouched: theirs are constructed-safe (SDK validation strings included).
      */
     private GatewayException sanitize(String op, Throwable cause) {
-        boolean submit = MUTATING_OPS.contains(op);
+        boolean mutating = MUTATING_OPS.contains(op);
         if (cause instanceof GatewayException gateway) {
             return gateway;
         }
         if (cause instanceof RestClientResponseException http) {
             int status = http.getStatusCode().value();
             log.warn("tsanet_gateway_http_error op={} status={}", op, status);
-            if (submit && !REJECTED_BEFORE_CREATE.contains(status)) {
+            if (mutating && !REJECTED_BEFORE_CREATE.contains(status)) {
                 return new GatewayTimeoutException(
                         "Connect API returned HTTP " + status + " (submit); outcome unknown");
             }
-            if (submit && (status == 400 || status == 422)) {
+            if (mutating && (status == 400 || status == 422)) {
                 // A validation rejection can mean the partner changed the form after
                 // it was loaded; "fix and resubmit" over a stale canvas cannot fix it.
                 // When the API answered in problem+json, its `detail` names the actual
@@ -609,7 +609,7 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         if (cause instanceof ResourceAccessException) {
             log.warn("tsanet_gateway_unreachable op={} cause={}",
                     op, cause.getCause() == null ? "io" : cause.getCause().getClass().getSimpleName());
-            if (submit) {
+            if (mutating) {
                 // The connection died after the request may have been sent: ambiguous.
                 return new GatewayTimeoutException("Connect API unreachable (submit); outcome unknown");
             }
@@ -621,8 +621,10 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
         }
         log.error("tsanet_gateway_error op={} type={}",
                 op, cause == null ? "unknown" : cause.getClass().getName(), cause);
-        if (submit) {
-            return new GatewayTimeoutException("Connect API call failed (submit); outcome unknown");
+        if (mutating) {
+            // An unclassified failure on a partner-visible write is ambiguous like any
+            // other: the op name rides the message so the panel can say which.
+            return new GatewayTimeoutException("Connect API call failed (" + op + "); outcome unknown");
         }
         return new GatewayException("Connect API call failed (" + op + ")");
     }

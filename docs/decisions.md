@@ -536,8 +536,30 @@ email field with the typed values preserved: one correction and a resubmit.
 **`caseNumber` is the ticket number, not the ticket id.** Probed live: an Intercom
 ticket carries `id` (`215475361003303`, the API handle) and `ticket_id`
 (`121556608`, the `#`-number an agent sees and can search). The partner quotes our
-case number back, so it must be the searchable one. Whatever we send is then RECORDED
-on the link rather than re-derived, so the value survives a change of convention.
+case number back, so it must be the searchable one.
+
+The number is captured at ticket-create time, from the create response, and recorded
+on the link — it is not re-derived later and never defaults to the anchor. **The first
+version of this shipped the decision in prose and the defect in code**: the panel fell
+back to `link.ticketId()`, which holds the handle, and the test asserted that value, so
+the suite was green on exactly the property this entry exists to protect (#17 QA
+round). Accept now REFUSES when no searchable number was captured, because quoting the
+handle fails silently — on a phone call, days later — while refusing is recoverable.
+
+**Ambiguity is durable for outbound and transient here, and that asymmetry is a known
+gap.** An ambiguous response tells the agent the outcome is unknown, but the recorded
+state has already moved, so a later render (second agent, second tab, after a restart)
+shows a cleanly answered case. Keeping the state moved is right — re-offering is what
+answers twice — but recording it as clean is not. The outbound flow has an UNRESOLVED
+status for exactly this; inbound has no equivalent yet. Named rather than papered over;
+it lands with the reconciliation poller, which is what can actually resolve it.
+
+**A ticket with several cases currently shows no panel at all.** `byTicketId` refuses a
+multiple match (correctly), `render()` returns empty, and the canvas falls through to
+the outbound partner search — so an agent sees no indication that two partner cases are
+attached and cannot answer either. Refusing to pick is right; rendering nothing is the
+gap. A "this ticket has N collaboration cases" panel fits the existing shape and is the
+follow-up.
 
 **One ticket can anchor several cases**, so `byTicketId` refuses a multiple match
 instead of picking. An agent may escalate one customer problem to two partners; a
