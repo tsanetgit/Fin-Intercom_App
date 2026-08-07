@@ -504,7 +504,11 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
                 dto.getPriority() == null ? null : dto.getPriority().toString(),
                 // testCase read, testSubmission written: the fields are deliberately
                 // asymmetric and reading the wrong one treats a test case as real.
-                Boolean.TRUE.equals(dto.getTestCase()));
+                Boolean.TRUE.equals(dto.getTestCase()),
+                // The server's clock, carried verbatim. This is what the cursor
+                // advances to, so converting it through anything local would put host
+                // skew back into the mark.
+                dto.getUpdatedAt() == null ? null : dto.getUpdatedAt().toInstant());
     }
 
     @Override

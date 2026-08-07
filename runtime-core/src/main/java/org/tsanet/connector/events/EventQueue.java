@@ -17,7 +17,9 @@ import org.tsanet.connector.config.ConnectorProperties;
  * claims it; unclaimed events keep the skeleton's log line. One drain thread on
  * purpose — handlers make bounded blocking calls and pilot volume is small, so
  * webhook events queue behind an in-flight handler (docs/decisions.md D10). The
- * reconciliation poller remains the source of truth regardless (D4).
+ * reconciliation poller is the backstop regardless (D4, D16) — and it deliberately
+ * does NOT enqueue here: offer() drops on full, so a large recovery batch could
+ * evict the very live events this queue exists to carry.
  */
 @Component
 public class EventQueue implements SmartInitializingSingleton {

@@ -58,8 +58,8 @@ class FakeTsanetGatewayContractTest extends TsanetGatewayContractTest {
         // makes the assertion capable of failing.
         Instant old = Instant.parse("2026-01-01T00:00:00Z");
         Instant recent = Instant.parse("2026-06-01T00:00:00Z");
-        fake.seedInbound(inbound("cursor-old"), old);
-        fake.seedInbound(inbound("cursor-recent"), recent);
+        fake.seedInbound(inbound("cursor-old", old));
+        fake.seedInbound(inbound("cursor-recent", recent));
 
         assertEquals(2, fake.listInboundUpdatedSince(null).size(), "no cursor means everything");
 
@@ -84,9 +84,8 @@ class FakeTsanetGatewayContractTest extends TsanetGatewayContractTest {
         // out of the feed is the direction filter itself. A ticket created for one of
         // our own submissions is the worst outcome available to the poller.
         fake.seedInbound(new InboundCase("outbound-seeded", InboundCase.Direction.OUTBOUND,
-                        InboundCase.Status.OPEN, "Test sdk2", "ours", "we sent this",
-                        null, "MEDIUM", true),
-                Instant.parse("2026-06-01T00:00:00Z"));
+                InboundCase.Status.OPEN, "Test sdk2", "ours", "we sent this",
+                null, "MEDIUM", true, Instant.parse("2026-06-01T00:00:00Z")));
         assertTrue(fake.listInboundUpdatedSince(null).stream()
                         .noneMatch(c -> "outbound-seeded".equals(c.token())),
                 "an OUTBOUND case reached the inbound feed");
@@ -102,8 +101,8 @@ class FakeTsanetGatewayContractTest extends TsanetGatewayContractTest {
         fake.failListWith(null);
     }
 
-    private static InboundCase inbound(String token) {
+    private static InboundCase inbound(String token, Instant updatedAt) {
         return new InboundCase(token, InboundCase.Direction.INBOUND, InboundCase.Status.OPEN,
-                "Test sdk2", "seeded", "seeded case", null, "MEDIUM", true);
+                "Test sdk2", "seeded", "seeded case", null, "MEDIUM", true, updatedAt);
     }
 }

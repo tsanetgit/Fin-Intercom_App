@@ -159,23 +159,20 @@ public class FakeTsanetGateway implements TsanetGateway {
      * no-op in ordinary development rather than inventing partner traffic.
      */
     private final List<InboundCase> inboundFeed = new CopyOnWriteArrayList<>();
-    private final Map<String, Instant> inboundUpdatedAt = new ConcurrentHashMap<>();
     private volatile RuntimeException listFailure;
 
-    /** Adds a case the poller will see, stamped with the updatedAt it reports. */
-    public void seedInbound(InboundCase inboundCase, Instant updatedAt) {
+    /**
+     * Adds a case the poller will see. The case carries its own updatedAt, exactly as a
+     * real list row does — a parallel map of timestamps would be a second source of the
+     * same fact, free to disagree with the record the poller actually reads.
+     */
+    public void seedInbound(InboundCase inboundCase) {
         inboundFeed.add(inboundCase);
-        inboundUpdatedAt.put(inboundCase.token(), updatedAt);
     }
 
     /** Makes list calls fail; null clears it. */
     public void failListWith(RuntimeException failure) {
         this.listFailure = failure;
-    }
-
-    /** The updatedAt this fake reports for a seeded case, for cursor assertions. */
-    public Instant updatedAtOf(String token) {
-        return inboundUpdatedAt.get(token);
     }
 
     @Override
@@ -193,13 +190,9 @@ public class FakeTsanetGateway implements TsanetGateway {
                 // A null cursor means "everything" — that is what a first run with no
                 // stored cursor asks for, and the real API treats an absent filter the
                 // same way. Refusing it here would hide that path from every test.
-                .filter(c -> {
-                    if (updatedAfter == null) {
-                        return true;
-                    }
-                    Instant at = inboundUpdatedAt.get(c.token());
-                    return at == null || !at.isBefore(updatedAfter);
-                })
+                .filter(c -> updatedAfter == null
+                        || c.updatedAt() == null
+                        || !c.updatedAt().isBefore(updatedAfter))
                 .toList();
     }
 
