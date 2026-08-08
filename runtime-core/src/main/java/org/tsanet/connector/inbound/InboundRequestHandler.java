@@ -118,6 +118,18 @@ public class InboundRequestHandler implements InboundEventHandler {
                     token, inboundCase.direction());
             return;
         }
+        if (inboundCase.terminal()) {
+            // #28: a missed create followed by a partner close (or a rejection recorded
+            // outside the connector) must not become an open PENDING ticket offering
+            // response actions on a case that is over. The closure event that could have
+            // resolved such a ticket was already consumed (closure_no_link), so creating
+            // here manufactures a permanently wrong item in an agent's queue. Skip —
+            // ruled over create-resolved 2026-08-08: the TSANet web app remains the
+            // record for cases that never had a ticket.
+            log.info("tsanet_audit event=inbound_skipped_terminal token={} status={}",
+                    token, inboundCase.status());
+            return;
+        }
 
         SubmissionLink claim = new SubmissionLink(token, INBOUND_INTERNAL_PREFIX + token,
                 null, null, null, inboundCase.partnerCompany(), inboundCase.respondBy(),

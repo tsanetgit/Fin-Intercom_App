@@ -142,4 +142,16 @@ class InboundRequestHandlerTest {
         assertFalse(handler.handles(new InboundEvent(InboundEvent.Source.INTERCOM,
                 TsanetCloudEvent.Type.REQUEST_CREATED.wireValue(), "inbound-1", Instant.now(), Map.of())));
     }
+
+    @Test
+    void aTerminalCaseIsSkippedWithoutClaimOrTicket() {
+        // The push path of #28: a late-delivered create event whose fetch reads back an
+        // already-CLOSED case (the fake's inbound-terminal prefix) must not become an
+        // open PENDING ticket offering response actions on a partner who is gone.
+        handler.handle(created("inbound-terminal-9"));
+
+        assertEquals(0, intercom.createCalls(), "skip means no ticket");
+        assertTrue(links.byToken("inbound-terminal-9").isEmpty(),
+                "and no claim — the token stays free, consistent with the case never arriving");
+    }
 }

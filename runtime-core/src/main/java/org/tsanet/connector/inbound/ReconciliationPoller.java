@@ -126,12 +126,26 @@ public class ReconciliationPoller {
 
         int created = 0;
         int alreadyLinked = 0;
+        int skippedTerminal = 0;
         int inFlight = 0;
         int failed = 0;
         Instant high = null;
         for (InboundCase c : cases) {
             if (c.token() == null || c.token().isBlank()) {
                 continue; // the gateway already logged it; unroutable either way
+            }
+            if (c.terminal()) {
+                // BEFORE the claim lookup on purpose (#28): a terminal case advances the
+                // cursor even when an orphaned claim exists for it — a crash between
+                // record() and anchor() followed by the partner closing. Nothing will
+                // ever anchor that claim and no create should happen, so treating it as
+                // in-flight would hold the cursor permanently. The handler carries the
+                // same guard for the push path; without THIS one, every partner-closed
+                // unlinked case would count as failed and wedge the cursor forever —
+                // the outcome check below reads no-link-after-handle as a failed create.
+                skippedTerminal++;
+                high = newest(high, c);
+                continue;
             }
             Optional<SubmissionLink> existing = links.byToken(c.token());
             if (existing.map(SubmissionLink::ticketAnchored).orElse(false)) {
@@ -201,8 +215,8 @@ public class ReconciliationPoller {
         if (failed > 0) {
             consecutiveFailures++;
             log.error("tsanet_audit event=reconcile_cycle_dirty listed={} created={} skipped={}"
-                            + " in_flight={} failed={} cursor_held={} consecutive={}",
-                    cases.size(), created, alreadyLinked, inFlight, failed, cursor,
+                            + " skipped_terminal={} in_flight={} failed={} cursor_held={} consecutive={}",
+                    cases.size(), created, alreadyLinked, skippedTerminal, inFlight, failed, cursor,
                     consecutiveFailures);
             return;
         }
@@ -218,8 +232,8 @@ public class ReconciliationPoller {
             // permanent, so this branch then repeats every cycle and the cursor never
             // advances. Loud, bounded, and recoverable by hand — see D16.
             log.warn("tsanet_audit event=reconcile_cycle_held listed={} created={} skipped={}"
-                            + " in_flight={} cursor_held={}",
-                    cases.size(), created, alreadyLinked, inFlight, cursor);
+                            + " skipped_terminal={} in_flight={} cursor_held={}",
+                    cases.size(), created, alreadyLinked, skippedTerminal, inFlight, cursor);
             return;
         }
 
@@ -249,8 +263,9 @@ public class ReconciliationPoller {
         // reports health the cycle has not earned.
         consecutiveFailures = 0;
         log.info("tsanet_audit event=reconcile_cycle listed={} created={} skipped={}"
-                        + " in_flight=0 failed=0 cursor={}",
-                cases.size(), created, alreadyLinked, high == null ? cursor : high);
+                        + " skipped_terminal={} in_flight=0 failed=0 cursor={}",
+                cases.size(), created, alreadyLinked, skippedTerminal,
+                high == null ? cursor : high);
     }
 
     /** How many cycles have failed in a row; 0 after any clean cycle. */

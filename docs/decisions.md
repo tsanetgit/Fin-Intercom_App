@@ -790,6 +790,24 @@ existed. Extending the poller to reconcile STATUS is the status-sync box on
 `tsanetgit/Fin-Intercom_App#24`. This slice recovers nothing; it only handles what
 arrives.
 
+**The inverse interaction is guarded (#28): a missed CREATE plus a partner close must
+not manufacture a dead ticket.** The closure handler declines to create for an unlinked
+case (`closure_no_link`) — but the poller's listing is status-blind, so it would later
+re-drive that same case through the create path and produce the exact open PENDING
+ticket the closure handler refused: response actions offered on a partner who has gone,
+permanently, since the closure event is consumed. So the create path now refuses
+terminal cases in BOTH entry points — `InboundCase.terminal()` (CLOSED and REJECTED,
+which D17 already maps to Resolved; PENDINGACTION deliberately excluded) is checked by
+the handler before claiming, and by the poller as a prefilter that still advances the
+cursor. The prefilter runs before the claim lookup on purpose: an orphaned claim on a
+terminal case would otherwise read as in-flight and hold the cursor forever. Skip was
+ruled over create-resolved (2026-08-08): a closed case needs no agent action, and the
+TSANet web app remains the record for cases that never had a ticket.
+
+**Operational note:** `closure_unconfigured` and `closure_ticket_resolve_failed` are
+one-shot permanent losses (a duplicate delivery is the only automatic second chance),
+not routine noise — whatever log monitoring the deployment gets should alert on both.
+
 **Outbound closure is not built.** An agent resolving the ticket does not close the
 partner's case. That needs a decision this repo has not taken: which Intercom state
 transitions are meant to propagate, whether resolving a never-accepted case is valid to

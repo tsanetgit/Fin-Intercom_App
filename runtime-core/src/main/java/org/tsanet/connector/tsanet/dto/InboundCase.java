@@ -55,4 +55,16 @@ public record InboundCase(
     public boolean inbound() {
         return direction == Direction.INBOUND;
     }
+
+    /**
+     * True when the case's lifecycle is over and no ticket should ever be created for
+     * it (#28). CLOSED and REJECTED: D17 already maps both to Resolved, so the codebase
+     * already treats them as terminal — and if the API ever allowed a reversal, the
+     * status change bumps {@code updatedAt} and re-surfaces the case past any advanced
+     * cursor, so this classification has no permanent-loss mode. PENDINGACTION stays
+     * out: undocumented in both contracts and deliberately unmapped (D17).
+     */
+    public boolean terminal() {
+        return status == Status.CLOSED || status == Status.REJECTED;
+    }
 }
