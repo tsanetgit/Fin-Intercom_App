@@ -186,4 +186,20 @@ class InboundPanelTest {
         assertTrue(rendered.contains("may or may not"));
         assertEquals(CaseState.INFO_REQUESTED, links.caseState("timeout-9"));
     }
+
+    @Test
+    void aPartnerClosedCaseSaysSoAndOffersNothing() {
+        // #27 shipped the branch, #29 the coverage: closed-by-partner is rendered
+        // distinct from "answered" because the agent did not do this and would
+        // otherwise wonder why their options vanished.
+        assertTrue(links.caseState(TOKEN, CaseState.PENDING, CaseState.CLOSED));
+        String rendered = text(panel.render(onTicket(TICKET)).orElseThrow());
+        assertTrue(rendered.contains("The partner closed this case."));
+        assertTrue(rendered.contains("closed by the partner"));
+        assertFalse(rendered.contains(InboundPanel.ACCEPT), "no action buttons on a closed case");
+        assertFalse(rendered.contains(InboundPanel.REJECT));
+        assertFalse(rendered.contains(InboundPanel.INFO));
+        assertFalse(rendered.contains("has been answered"),
+                "closed must not render as the answered branch — the agent did not do this");
+    }
 }

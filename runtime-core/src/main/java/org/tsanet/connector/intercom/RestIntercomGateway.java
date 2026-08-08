@@ -135,10 +135,13 @@ public class RestIntercomGateway implements IntercomGateway {
     }
 
     /**
-     * D3 applied to the state write. The read-back compares the ticket's own
-     * {@code ticket_state} STRING against the internal label of the state we asked for,
-     * because the write takes an id and the read gives a name — there is no single field
-     * that answers both.
+     * D3 applied to the state write: asserts the ticket's {@code open} flag went false.
+     * It cannot compare states by name — the write takes an id, the read gives a
+     * label, and the id-to-label mapping is only reachable under
+     * {@code Intercom-Version: Unstable} (D17) — so the check rests on every state
+     * this connector writes being terminal. {@code ticket_state} is quoted in the
+     * error only. (#29 rider: an earlier version of this javadoc described a label
+     * comparison the code never performed.)
      */
     private void verifyStateLanded(String ticketId, String stateId) {
         Map<?, ?> ticket;
