@@ -349,6 +349,29 @@ class ReconciliationPollerTest {
         assertEquals(0, intercom.createCalls());
     }
 
+    @Test
+    void heldCyclesClimbWhileAClaimStaysUnanchoredAndResetWhenItResolves() {
+        // #26 (surfacing ruled over reclaim): an orphaned claim holds the cursor while
+        // consecutiveFailures stays 0, so the failure counter can never alert on it.
+        // consecutiveHeld climbing with failures at 0 is the orphan signature.
+        Instant at = Instant.now().minus(Duration.ofMinutes(5));
+        tsanet.seedInbound(inbound("inbound-held", at));
+        links.record(new SubmissionLink("inbound-held", "inbound:inbound-held",
+                null, null, null, "Test sdk2", null, true, null, Instant.now()));
+
+        ReconciliationPoller poller = poller(TYPE);
+        poller.cycle();
+        assertEquals(1, poller.consecutiveHeld(), "an unanchored claim held the cursor");
+        poller.cycle();
+        assertEquals(2, poller.consecutiveHeld(), "and the counter climbs while it stays");
+        assertEquals(0, poller.consecutiveFailures(), "a hold is not a failure");
+
+        links.anchor("inbound-held", "ticket-held");
+        poller.cycle();
+        assertEquals(0, poller.consecutiveHeld(),
+                "a completed listing that observed no unanchored claim resets the counter");
+    }
+
     /** Captures the cursor the poller actually asks for. */
     private static final class RecordingGateway extends FakeTsanetGateway {
         private Instant asked;

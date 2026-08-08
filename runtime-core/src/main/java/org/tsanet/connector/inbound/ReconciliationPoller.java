@@ -73,6 +73,17 @@ public class ReconciliationPoller {
      */
     private volatile int consecutiveFailures;
 
+    /**
+     * Consecutive completed listings that observed at least one unanchored claim.
+     * Distinct from {@link #consecutiveFailures} on purpose: a held cursor is not a
+     * failure, but a claim that stays unanchored cycle after cycle is an orphan (a
+     * crash between record() and anchor()) that will never self-heal — and
+     * consecutiveFailures stays 0 the whole time, so an alert keyed on it never fires.
+     * This counter is the alert surface (#26: surfacing was ruled over automatic
+     * reclaim). Volatile for the same reason as consecutiveFailures.
+     */
+    private volatile int consecutiveHeld;
+
     public ReconciliationPoller(TsanetGateway tsanet, InboundRequestHandler handler,
             SubmissionLinkTable links, PollerStateStore state, InboundProperties properties) {
         this.tsanet = tsanet;
@@ -130,6 +141,7 @@ public class ReconciliationPoller {
         int inFlight = 0;
         int failed = 0;
         Instant high = null;
+        Instant oldestClaim = null;
         for (InboundCase c : cases) {
             if (c.token() == null || c.token().isBlank()) {
                 continue; // the gateway already logged it; unroutable either way
@@ -162,6 +174,7 @@ public class ReconciliationPoller {
                 // if that create then fails and releases the claim, the case would fall
                 // outside the window with no link and never be seen again.
                 inFlight++;
+                oldestClaim = older(oldestClaim, existing.get().submittedAt());
                 log.info("tsanet_audit event=reconcile_in_flight token={}", c.token());
                 continue;
             }
@@ -198,6 +211,7 @@ public class ReconciliationPoller {
                 // Claimed by someone else mid-cycle. In flight, so hold the cursor
                 // without calling it a failure.
                 inFlight++;
+                oldestClaim = older(oldestClaim, after.get().submittedAt());
                 log.info("tsanet_audit event=reconcile_in_flight token={}", c.token());
             } else {
                 // Every case reaching here was INBOUND (filtered server-side and
@@ -211,6 +225,13 @@ public class ReconciliationPoller {
                         + " reason=handler_declined_or_failed", c.token());
             }
         }
+
+        // One place, keyed on what the completed listing OBSERVED (#26): the counter
+        // measures claim staleness, not cycle health. A dirty cycle that observed no
+        // claim still resets it; a failed LIST observed nothing and left it unchanged
+        // by returning above. That includes the cursor-persist-failure exit below —
+        // deliberate, see D16.
+        consecutiveHeld = inFlight > 0 ? consecutiveHeld + 1 : 0;
 
         if (failed > 0) {
             consecutiveFailures++;
@@ -230,10 +251,15 @@ public class ReconciliationPoller {
             //
             // NOTE: an orphaned claim (a crash between record() and anchor()) is
             // permanent, so this branch then repeats every cycle and the cursor never
-            // advances. Loud, bounded, and recoverable by hand — see D16.
+            // advances. Loud, bounded, and recoverable by hand — held_cycles and the
+            // oldest claim's age are the alert surface for exactly that (#26; a live
+            // create resolves within its gateway deadline, so an age far past it
+            // means orphan). See D16.
             log.warn("tsanet_audit event=reconcile_cycle_held listed={} created={} skipped={}"
-                            + " skipped_terminal={} in_flight={} cursor_held={}",
-                    cases.size(), created, alreadyLinked, skippedTerminal, inFlight, cursor);
+                            + " skipped_terminal={} in_flight={} cursor_held={} held_cycles={}"
+                            + " oldest_claim_age_s={}",
+                    cases.size(), created, alreadyLinked, skippedTerminal, inFlight, cursor,
+                    consecutiveHeld, claimAgeSeconds(oldestClaim));
             return;
         }
 
@@ -271,6 +297,28 @@ public class ReconciliationPoller {
     /** How many cycles have failed in a row; 0 after any clean cycle. */
     public int consecutiveFailures() {
         return consecutiveFailures;
+    }
+
+    /**
+     * Consecutive completed listings that observed an unanchored claim; 0 after one
+     * that observed none. Climbing while {@link #consecutiveFailures} sits at 0 is the
+     * orphaned-claim signature (#26).
+     */
+    public int consecutiveHeld() {
+        return consecutiveHeld;
+    }
+
+    /** The oldest claim timestamp seen this cycle; a null submittedAt cannot age a claim. */
+    private static Instant older(Instant current, Instant candidate) {
+        if (candidate == null) {
+            return current;
+        }
+        return current == null || candidate.isBefore(current) ? candidate : current;
+    }
+
+    /** Age in seconds of the oldest observed claim, or -1 when none carried a timestamp. */
+    private static long claimAgeSeconds(Instant oldestClaim) {
+        return oldestClaim == null ? -1 : java.time.Duration.between(oldestClaim, Instant.now()).getSeconds();
     }
 
     /**
