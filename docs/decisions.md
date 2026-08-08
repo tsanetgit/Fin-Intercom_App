@@ -668,6 +668,28 @@ duplicate the work and fight over the mark.
 Out of scope and deliberately unclaimed: status sync, notes, and closure. This slice
 recovers missing tickets and nothing else.
 
+**Orphaned claims: surfacing, not reclaim (ruled 2026-08-08, closes the question
+`tsanetgit/Fin-Intercom_App#26` left open).** A crash between `record()` and `anchor()`
+leaves an unanchored claim nothing will ever anchor; every later cycle reads it as
+in-flight and holds the cursor, while `consecutiveFailures` stays 0 — so an alert keyed
+on the failure counter never fires. The considered fix was age-based reclaim, and it was
+rejected: a threshold short enough to recover quickly can pull the claim out from under
+a live-but-slow create, and two creators with the loser already released is exactly the
+duplicate-ticket class D14 exists to prevent — machinery with its own failure modes, to
+cover a crash inside a millisecond window that is already loud in every cycle's logs.
+Instead the condition is made alertable: `consecutiveHeld` counts consecutive completed
+listings that observed an unanchored claim (climbing while `consecutiveFailures` sits at
+0 is the orphan signature), and the held cycle line carries the oldest claim's age — a
+live create resolves within its gateway deadline, so an age far past it means orphan.
+The one subclass the counter structurally cannot see — an orphaned claim on a case that
+then went TERMINAL, which the #28 prefilter advances past rather than holding on — is
+named by `reconcile_orphaned_claim_terminal` at the moment the prefilter passes it,
+because after that the case leaves the window and the stale row goes invisible.
+The counter measures claim staleness, not cycle health: a dirty cycle or a
+cursor-persist-failure cycle that observed no claims still resets it, on purpose — do
+not "fix" that. Releasing an orphan stays a human action, taken by someone who can see
+whether the ticket exists.
+
 ## D17. Case status to ticket state: the mapping, and the two statuses we refuse to map
 
 Promoted from the Phase 0 spike, where it lived only as a note. Nothing in the code
@@ -789,6 +811,24 @@ existed. Extending the poller to reconcile STATUS is the status-sync box on
 `tsanetgit/Member-Integrations#51`, and it is blocked on
 `tsanetgit/Fin-Intercom_App#24`. This slice recovers nothing; it only handles what
 arrives.
+
+**The inverse interaction is guarded (#28): a missed CREATE plus a partner close must
+not manufacture a dead ticket.** The closure handler declines to create for an unlinked
+case (`closure_no_link`) — but the poller's listing is status-blind, so it would later
+re-drive that same case through the create path and produce the exact open PENDING
+ticket the closure handler refused: response actions offered on a partner who has gone,
+permanently, since the closure event is consumed. So the create path now refuses
+terminal cases in BOTH entry points — `InboundCase.terminal()` (CLOSED and REJECTED,
+which D17 already maps to Resolved; PENDINGACTION deliberately excluded) is checked by
+the handler before claiming, and by the poller as a prefilter that still advances the
+cursor. The prefilter runs before the claim lookup on purpose: an orphaned claim on a
+terminal case would otherwise read as in-flight and hold the cursor forever. Skip was
+ruled over create-resolved (2026-08-08): a closed case needs no agent action, and the
+TSANet web app remains the record for cases that never had a ticket.
+
+**Operational note:** `closure_unconfigured` and `closure_ticket_resolve_failed` are
+one-shot permanent losses (a duplicate delivery is the only automatic second chance),
+not routine noise — whatever log monitoring the deployment gets should alert on both.
 
 **Outbound closure is not built.** An agent resolving the ticket does not close the
 partner's case. That needs a decision this repo has not taken: which Intercom state

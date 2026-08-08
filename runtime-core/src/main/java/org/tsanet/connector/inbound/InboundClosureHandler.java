@@ -27,9 +27,14 @@ import org.tsanet.connector.webhooks.TsanetCloudEvent;
  * the risk runs the other way: recording CLOSED before the ticket actually resolves
  * would tell an agent the case is closed while the ticket sits open in their queue.
  *
- * <p><b>Idempotent, because it will be delivered more than once.</b> A ticket already
- * resolved is left alone: TSANet redelivers on any non-2xx, the drain can replay, and a
- * closure arriving twice must not produce two writes.
+ * <p><b>Idempotent, because it may be delivered more than once.</b> A ticket already
+ * resolved is left alone: at-least-once delivery can duplicate an event, and a closure
+ * arriving twice must not produce two writes. Duplicates are also the ONLY second
+ * chance a failed branch below gets — the intake 200-acks every branch by design (D4)
+ * so TSANet never retries, and the drain consumes on handler exception without replay.
+ * Nothing re-drives a lost or failed closure (#28 riders corrected this javadoc: an
+ * earlier version claimed redelivery-on-non-2xx and drain replay, neither of which is
+ * real).
  *
  * <p><b>What this does NOT recover.</b> Nothing re-drives a MISSED closure. The
  * reconciliation poller (D16) claims {@code collaboration-request.created} only, so a
@@ -80,7 +85,8 @@ public class InboundClosureHandler implements InboundEventHandler {
             // No default is possible: ticket-state ids are PER-WORKSPACE (D17), and the
             // only way found to enumerate them is an API version labelled Unstable. A
             // guessed id would either 404 or — worse — move the ticket to some other
-            // workspace-local state that happens to share the number.
+            // workspace-local state that happens to share the number. ALERTABLE: each
+            // closure arriving while unconfigured is a one-shot permanent loss (D18).
             log.error("tsanet_audit event=closure_unconfigured token={} reason=no_resolved_state_id",
                     token);
             return;
@@ -96,7 +102,10 @@ public class InboundClosureHandler implements InboundEventHandler {
         SubmissionLink link = found.get();
         if (!link.ticketAnchored()) {
             // A claim mid-flight: the create has not finished, so there is no ticket to
-            // resolve yet. Same shape as the poller's in-flight case.
+            // resolve yet. LOOKS like the poller's in-flight case but recovers
+            // differently: the poller re-drives its case next cycle, while nothing
+            // re-drives this closure — a duplicate delivery or manual replay is the
+            // only second chance (#28 rider).
             log.warn("tsanet_audit event=closure_unanchored token={} reason=claim_in_flight", token);
             return;
         }
@@ -109,9 +118,12 @@ public class InboundClosureHandler implements InboundEventHandler {
         try {
             intercom.moveTicketState(link.ticketId(), resolvedStateId);
         } catch (RuntimeException e) {
-            // Loud and not recorded: leaving the state un-moved is what lets a
-            // redelivery or a manual retry still fix it. Recording CLOSED here would
-            // make the next delivery a no-op and strand the ticket open permanently.
+            // Loud and not recorded: leaving the state un-moved keeps a TSANet
+            // duplicate delivery or a manual replay able to fix it — and those are the
+            // ONLY recovery surfaces (nothing re-drives closures; the intake acks
+            // everything, D4). Recording CLOSED here would make even that second chance
+            // a no-op and strand the ticket open permanently. ALERTABLE: with no
+            // duplicate in flight this line is a one-shot permanent loss (D18).
             log.error("tsanet_audit event=closure_ticket_resolve_failed token={} ticket={} reason={}",
                     token, link.ticketId(), e.getMessage());
             return;

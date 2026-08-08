@@ -72,18 +72,24 @@ public class CanvasController {
     @PostMapping("/canvas/submit")
     public Map<String, Object> submit(@RequestBody Map<String, Object> payload) {
         String surface = surface(payload);
-        OutboundFlowState state = flows.find(storedFlowId(payload));
-        if (state == null) {
-            return home(flows.create(), surface, "That panel session expired; starting over.");
-        }
         String component = String.valueOf(payload.getOrDefault("component_id", ""));
         Map<String, String> inputs = inputValues(payload);
 
+        // BEFORE the flow lookup, not after: inbound components never have (or need) an
+        // outbound flow — InboundPanel canvases store no flow pointer at all — so
+        // resolving the flow first sent every live inbound click to the expired-session
+        // home and the panel's buttons were unreachable (#33). The id namespaces are
+        // disjoint (inbound_* vs the outbound set), so nothing outbound can be shadowed.
         if (org.tsanet.connector.inbound.InboundPanel.owns(component)) {
             Optional<Map<String, Object>> answered = inbound.submit(payload, component, inputs);
             if (answered.isPresent()) {
                 return answered.get();
             }
+        }
+
+        OutboundFlowState state = flows.find(storedFlowId(payload));
+        if (state == null) {
+            return home(flows.create(), surface, "That panel session expired; starting over.");
         }
 
         if ("back_home".equals(component)) {

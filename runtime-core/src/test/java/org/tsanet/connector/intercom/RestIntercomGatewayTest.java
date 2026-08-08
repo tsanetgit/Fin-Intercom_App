@@ -129,4 +129,50 @@ class RestIntercomGatewayTest {
         assertTrue(html.contains("&amp; Co"));
         assertTrue(!html.contains("<script>"));
     }
+
+    // ---- moveTicketState / verifyStateLanded (#29): the read-back is the method's
+    // reason to exist — before these probes, an implementation that skipped
+    // verifyStateLanded entirely passed every test in the repo. ----
+
+    @Test
+    void stateMoveWritesTheIdAndReadsBackClosed() {
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andExpect(content().json("{\"ticket_state_id\":\"9619799\"}"))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"open\":false,\"ticket_state\":\"Resolved\"}",
+                        MediaType.APPLICATION_JSON));
+        gateway.moveTicketState("ticket-9", "9619799");
+        server.verify();
+    }
+
+    @Test
+    void stateMoveSilent200ThrowsWithTheWorkspaceHint() {
+        // The D3 case the method exists for: Intercom answers 200 while ignoring an
+        // unknown or foreign ticket_state_id (the silent-200 trap, T1), so the ticket
+        // reads back still open.
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"open\":true,\"ticket_state\":\"Submitted\"}",
+                        MediaType.APPLICATION_JSON));
+        IntercomException e = assertThrows(IntercomException.class,
+                () -> gateway.moveTicketState("ticket-9", "9619799"));
+        assertTrue(e.getMessage().contains("resolved-state-id"),
+                "the hint must point at the per-workspace configuration, the one thing an"
+                        + " operator can actually fix: " + e.getMessage());
+    }
+
+    @Test
+    void stateMoveReadBackFailureIsAFailureNotSuccess() {
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.GET))
+                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+        IntercomException e = assertThrows(IntercomException.class,
+                () -> gateway.moveTicketState("ticket-9", "9619799"));
+        assertTrue(e.getMessage().contains("state read-back"),
+                "a failed read-back proves nothing landed; it must not surface as success: "
+                        + e.getMessage());
+    }
 }

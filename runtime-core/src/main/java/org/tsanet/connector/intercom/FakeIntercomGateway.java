@@ -103,6 +103,9 @@ public class FakeIntercomGateway implements IntercomGateway {
         // Counted BEFORE validation, so a caller that should not have called at all is
         // distinguishable from one that called with a bad argument. Asserting only on
         // the resulting state cannot tell those apart — the fake rejects both.
+        // DIVERGENCE from RestIntercomGateway: no read-back verification here — the
+        // fake records the state directly, so the D3 silent-200 class is exercised
+        // only by RestIntercomGatewayTest's wire-level probes (#29).
         stateMoveCalls.incrementAndGet();
         if (ticketId == null || ticketId.isBlank() || stateId == null || stateId.isBlank()) {
             throw new IntercomException("moveTicketState needs both a ticket id and a state id");

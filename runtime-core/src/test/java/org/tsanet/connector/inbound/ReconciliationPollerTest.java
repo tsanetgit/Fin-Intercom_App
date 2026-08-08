@@ -305,6 +305,73 @@ class ReconciliationPollerTest {
         }
     }
 
+    private static InboundCase terminal(String token, InboundCase.Status status, Instant updatedAt) {
+        return new InboundCase(token, InboundCase.Direction.INBOUND, status,
+                "Test sdk2", "Closed before we saw it", "described", null, "HIGH", true, updatedAt);
+    }
+
+    @Test
+    void terminalCasesAdvanceTheCursorWithoutCreatingTickets() {
+        // #28: a missed create followed by a partner close (or a rejection recorded
+        // outside the connector) is a case whose lifecycle is over. Creating now would
+        // manufacture an open PENDING ticket offering response actions on a partner who
+        // is gone — permanently, since the closure event was already consumed.
+        Instant older = Instant.now().minus(Duration.ofMinutes(10));
+        Instant newer = Instant.now().minus(Duration.ofMinutes(5));
+        tsanet.seedInbound(terminal("inbound-was-closed", InboundCase.Status.CLOSED, older));
+        tsanet.seedInbound(terminal("inbound-was-rejected", InboundCase.Status.REJECTED, newer));
+
+        poller(TYPE).cycle();
+
+        assertEquals(0, intercom.createCalls(), "a terminal case must never become a ticket");
+        assertTrue(links.byToken("inbound-was-closed").isEmpty(), "and no claim — skip means skip");
+        assertTrue(links.byToken("inbound-was-rejected").isEmpty());
+        assertEquals(Optional.of(newer), state.cursor(),
+                "the cursor must advance past terminal cases, or the poller re-lists and"
+                        + " re-skips them forever and never passes them");
+    }
+
+    @Test
+    void anOrphanedClaimOnATerminalCaseCannotWedgeTheCursor() {
+        Instant at = Instant.now().minus(Duration.ofMinutes(5));
+        tsanet.seedInbound(terminal("inbound-orphan-closed", InboundCase.Status.CLOSED, at));
+        // The crash window: record() happened, anchor() never will — and the partner
+        // then closed the case. Nothing will ever anchor this claim, so if the terminal
+        // prefilter ran AFTER the claim lookup this would read as in-flight and hold
+        // the cursor permanently.
+        links.record(new SubmissionLink("inbound-orphan-closed", "inbound:inbound-orphan-closed",
+                null, null, null, "Test sdk2", null, true, null, Instant.now()));
+
+        poller(TYPE).cycle();
+
+        assertEquals(Optional.of(at), state.cursor(),
+                "the terminal prefilter must run before the claim lookup (#28)");
+        assertEquals(0, intercom.createCalls());
+    }
+
+    @Test
+    void heldCyclesClimbWhileAClaimStaysUnanchoredAndResetWhenItResolves() {
+        // #26 (surfacing ruled over reclaim): an orphaned claim holds the cursor while
+        // consecutiveFailures stays 0, so the failure counter can never alert on it.
+        // consecutiveHeld climbing with failures at 0 is the orphan signature.
+        Instant at = Instant.now().minus(Duration.ofMinutes(5));
+        tsanet.seedInbound(inbound("inbound-held", at));
+        links.record(new SubmissionLink("inbound-held", "inbound:inbound-held",
+                null, null, null, "Test sdk2", null, true, null, Instant.now()));
+
+        ReconciliationPoller poller = poller(TYPE);
+        poller.cycle();
+        assertEquals(1, poller.consecutiveHeld(), "an unanchored claim held the cursor");
+        poller.cycle();
+        assertEquals(2, poller.consecutiveHeld(), "and the counter climbs while it stays");
+        assertEquals(0, poller.consecutiveFailures(), "a hold is not a failure");
+
+        links.anchor("inbound-held", "ticket-held");
+        poller.cycle();
+        assertEquals(0, poller.consecutiveHeld(),
+                "a completed listing that observed no unanchored claim resets the counter");
+    }
+
     /** Captures the cursor the poller actually asks for. */
     private static final class RecordingGateway extends FakeTsanetGateway {
         private Instant asked;

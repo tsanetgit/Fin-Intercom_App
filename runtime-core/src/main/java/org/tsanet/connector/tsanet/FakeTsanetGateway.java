@@ -133,9 +133,11 @@ public class FakeTsanetGateway implements TsanetGateway {
 
     /**
      * Fixture inbound cases, keyed by token. A token starting {@code failfetch} throws
-     * (so handlers can be built against a failing read), {@code inbound-} yields a
-     * partner-originated case, and {@code outbound-} yields one of our own — the case
-     * a handler must NOT create a ticket for. Anything else is unknown.
+     * (so handlers can be built against a failing read), {@code inbound-terminal}
+     * yields a partner case already CLOSED (the late-event-after-close case #28
+     * guards), {@code inbound-} yields a live partner-originated case, and
+     * {@code outbound-} yields one of our own — the case a handler must NOT create a
+     * ticket for. Anything else is unknown.
      */
     @Override
     public Optional<InboundCase> fetchByToken(String token) {
@@ -147,6 +149,13 @@ public class FakeTsanetGateway implements TsanetGateway {
         }
         if (token.startsWith("timeoutfetch")) {
             throw new GatewayTimeoutException("Connect API timed out (fetchByToken, >1500ms)");
+        }
+        if (token.startsWith("inbound-terminal")) {
+            // Checked before the inbound- prefix, which it also matches.
+            return Optional.of(new InboundCase(token, InboundCase.Direction.INBOUND,
+                    InboundCase.Status.CLOSED, "NetApp", "Closed before we saw it",
+                    "the partner closed this case already", "2026-08-08T12:00:00Z",
+                    "HIGH", true));
         }
         if (token.startsWith("inbound-")) {
             return Optional.of(new InboundCase(token, InboundCase.Direction.INBOUND,

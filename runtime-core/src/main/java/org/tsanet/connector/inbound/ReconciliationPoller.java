@@ -73,6 +73,17 @@ public class ReconciliationPoller {
      */
     private volatile int consecutiveFailures;
 
+    /**
+     * Consecutive completed listings that observed at least one unanchored claim.
+     * Distinct from {@link #consecutiveFailures} on purpose: a held cursor is not a
+     * failure, but a claim that stays unanchored cycle after cycle is an orphan (a
+     * crash between record() and anchor()) that will never self-heal — and
+     * consecutiveFailures stays 0 the whole time, so an alert keyed on it never fires.
+     * This counter is the alert surface (#26: surfacing was ruled over automatic
+     * reclaim). Volatile for the same reason as consecutiveFailures.
+     */
+    private volatile int consecutiveHeld;
+
     public ReconciliationPoller(TsanetGateway tsanet, InboundRequestHandler handler,
             SubmissionLinkTable links, PollerStateStore state, InboundProperties properties) {
         this.tsanet = tsanet;
@@ -126,12 +137,37 @@ public class ReconciliationPoller {
 
         int created = 0;
         int alreadyLinked = 0;
+        int skippedTerminal = 0;
         int inFlight = 0;
         int failed = 0;
         Instant high = null;
+        Instant oldestClaim = null;
         for (InboundCase c : cases) {
             if (c.token() == null || c.token().isBlank()) {
                 continue; // the gateway already logged it; unroutable either way
+            }
+            if (c.terminal()) {
+                // BEFORE the claim lookup on purpose (#28): a terminal case advances the
+                // cursor even when an orphaned claim exists for it — a crash between
+                // record() and anchor() followed by the partner closing. Nothing will
+                // ever anchor that claim and no create should happen, so treating it as
+                // in-flight would hold the cursor permanently. The handler carries the
+                // same guard for the push path; without THIS one, every partner-closed
+                // unlinked case would count as failed and wedge the cursor forever —
+                // the outcome check below reads no-link-after-handle as a failed create.
+                //
+                // The one surface such an orphan gets: once the cursor passes, the case
+                // leaves the window and the stale claim row goes invisible, so it is
+                // named here while still listed (#26's held counter never sees it —
+                // this branch deliberately skips before inFlight is counted).
+                links.byToken(c.token())
+                        .filter(l -> !l.ticketAnchored())
+                        .ifPresent(l -> log.warn("tsanet_audit event=reconcile_orphaned_claim_terminal"
+                                        + " token={} status={} claim_age_s={} action=release_by_hand",
+                                c.token(), c.status(), claimAgeSeconds(l.submittedAt())));
+                skippedTerminal++;
+                high = newest(high, c);
+                continue;
             }
             Optional<SubmissionLink> existing = links.byToken(c.token());
             if (existing.map(SubmissionLink::ticketAnchored).orElse(false)) {
@@ -148,6 +184,7 @@ public class ReconciliationPoller {
                 // if that create then fails and releases the claim, the case would fall
                 // outside the window with no link and never be seen again.
                 inFlight++;
+                oldestClaim = older(oldestClaim, existing.get().submittedAt());
                 log.info("tsanet_audit event=reconcile_in_flight token={}", c.token());
                 continue;
             }
@@ -184,6 +221,7 @@ public class ReconciliationPoller {
                 // Claimed by someone else mid-cycle. In flight, so hold the cursor
                 // without calling it a failure.
                 inFlight++;
+                oldestClaim = older(oldestClaim, after.get().submittedAt());
                 log.info("tsanet_audit event=reconcile_in_flight token={}", c.token());
             } else {
                 // Every case reaching here was INBOUND (filtered server-side and
@@ -198,11 +236,18 @@ public class ReconciliationPoller {
             }
         }
 
+        // One place, keyed on what the completed listing OBSERVED (#26): the counter
+        // measures claim staleness, not cycle health. A dirty cycle that observed no
+        // claim still resets it; a failed LIST observed nothing and left it unchanged
+        // by returning above. That includes the cursor-persist-failure exit below —
+        // deliberate, see D16.
+        consecutiveHeld = inFlight > 0 ? consecutiveHeld + 1 : 0;
+
         if (failed > 0) {
             consecutiveFailures++;
             log.error("tsanet_audit event=reconcile_cycle_dirty listed={} created={} skipped={}"
-                            + " in_flight={} failed={} cursor_held={} consecutive={}",
-                    cases.size(), created, alreadyLinked, inFlight, failed, cursor,
+                            + " skipped_terminal={} in_flight={} failed={} cursor_held={} consecutive={}",
+                    cases.size(), created, alreadyLinked, skippedTerminal, inFlight, failed, cursor,
                     consecutiveFailures);
             return;
         }
@@ -216,10 +261,15 @@ public class ReconciliationPoller {
             //
             // NOTE: an orphaned claim (a crash between record() and anchor()) is
             // permanent, so this branch then repeats every cycle and the cursor never
-            // advances. Loud, bounded, and recoverable by hand — see D16.
+            // advances. Loud, bounded, and recoverable by hand — held_cycles and the
+            // oldest claim's age are the alert surface for exactly that (#26; a live
+            // create resolves within its gateway deadline, so an age far past it
+            // means orphan). See D16.
             log.warn("tsanet_audit event=reconcile_cycle_held listed={} created={} skipped={}"
-                            + " in_flight={} cursor_held={}",
-                    cases.size(), created, alreadyLinked, inFlight, cursor);
+                            + " skipped_terminal={} in_flight={} cursor_held={} held_cycles={}"
+                            + " oldest_claim_age_s={}",
+                    cases.size(), created, alreadyLinked, skippedTerminal, inFlight, cursor,
+                    consecutiveHeld, claimAgeSeconds(oldestClaim));
             return;
         }
 
@@ -249,13 +299,36 @@ public class ReconciliationPoller {
         // reports health the cycle has not earned.
         consecutiveFailures = 0;
         log.info("tsanet_audit event=reconcile_cycle listed={} created={} skipped={}"
-                        + " in_flight=0 failed=0 cursor={}",
-                cases.size(), created, alreadyLinked, high == null ? cursor : high);
+                        + " skipped_terminal={} in_flight=0 failed=0 cursor={}",
+                cases.size(), created, alreadyLinked, skippedTerminal,
+                high == null ? cursor : high);
     }
 
     /** How many cycles have failed in a row; 0 after any clean cycle. */
     public int consecutiveFailures() {
         return consecutiveFailures;
+    }
+
+    /**
+     * Consecutive completed listings that observed an unanchored claim; 0 after one
+     * that observed none. Climbing while {@link #consecutiveFailures} sits at 0 is the
+     * orphaned-claim signature (#26).
+     */
+    public int consecutiveHeld() {
+        return consecutiveHeld;
+    }
+
+    /** The oldest claim timestamp seen this cycle; a null submittedAt cannot age a claim. */
+    private static Instant older(Instant current, Instant candidate) {
+        if (candidate == null) {
+            return current;
+        }
+        return current == null || candidate.isBefore(current) ? candidate : current;
+    }
+
+    /** Age in seconds of the oldest observed claim, or -1 when none carried a timestamp. */
+    private static long claimAgeSeconds(Instant oldestClaim) {
+        return oldestClaim == null ? -1 : java.time.Duration.between(oldestClaim, Instant.now()).getSeconds();
     }
 
     /**
