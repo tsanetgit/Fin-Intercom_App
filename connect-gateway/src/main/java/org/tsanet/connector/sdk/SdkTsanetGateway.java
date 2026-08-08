@@ -671,19 +671,22 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
             log.warn("tsanet_gateway_http_error op={} status={}", op, status);
             if (mutating && !REJECTED_BEFORE_CREATE.contains(status)) {
                 return new GatewayTimeoutException(
-                        "Connect API returned HTTP " + status + " (submit); outcome unknown");
+                        "Connect API returned HTTP " + status + " (" + op + "); outcome unknown");
             }
             if (mutating && (status == 400 || status == 422)) {
-                // A validation rejection can mean the partner changed the form after
-                // it was loaded; "fix and resubmit" over a stale canvas cannot fix it.
                 // When the API answered in problem+json, its `detail` names the actual
                 // rule (e.g. the submitter email-domain requirement) — the one narrow,
                 // guarded case where response content reaches an agent-visible card.
                 String detail = problemDetail(http);
+                // The reselect hint is submit-flow advice (only submit rides a partner
+                // form); on approve/reject/information it is misdirection, so it is
+                // gated on the op rather than on MUTATING_OPS membership (#19).
+                String hint = "submit".equals(op)
+                        ? "; if the partner's form changed since it was loaded,"
+                                + " reselect the partner and retry"
+                        : "";
                 return new GatewayException("Connect API rejected the request (HTTP " + status
-                        + ", submit)" + (detail != null ? ": " + detail : "")
-                        + "; if the partner's form changed since it was loaded,"
-                        + " reselect the partner and retry");
+                        + ", " + op + ")" + (detail != null ? ": " + detail : "") + hint);
             }
             return new GatewayException("Connect API rejected the request (HTTP " + status + ", " + op + ")");
         }
@@ -692,7 +695,7 @@ public final class SdkTsanetGateway implements TsanetGateway, AutoCloseable {
                     op, cause.getCause() == null ? "io" : cause.getCause().getClass().getSimpleName());
             if (mutating) {
                 // The connection died after the request may have been sent: ambiguous.
-                return new GatewayTimeoutException("Connect API unreachable (submit); outcome unknown");
+                return new GatewayTimeoutException("Connect API unreachable (" + op + "); outcome unknown");
             }
             return new GatewayException("Connect API unreachable (" + op + ")");
         }

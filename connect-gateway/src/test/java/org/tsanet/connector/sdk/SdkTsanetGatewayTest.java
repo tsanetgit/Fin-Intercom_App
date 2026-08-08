@@ -578,6 +578,80 @@ class SdkTsanetGatewayTest {
         caseResponses.failWith = null;
     }
 
+    @Test
+    void failureMessagesNameTheOpThatFailed() {
+        // #19: the agent-visible card is the whole recovery surface for a failed
+        // partner write — an agent who approved a case must not read a message about a
+        // submit at exactly the moment they are deciding whether to check TSANet
+        // Connect manually. The sweep that broadened MUTATING_OPS matched op-name
+        // COMPARISONS; these are op names embedded in message LITERALS, the same
+        // defect one level down. Same discipline as the interrupt probe: the map is
+        // read against the REAL set, so a fifth mutating op cannot ship without a
+        // message probe.
+        SdkTsanetGateway gateway = gateway(1500, 4000);
+        org.tsanet.connector.tsanet.dto.EngineerIdentity engineer =
+                new org.tsanet.connector.tsanet.dto.EngineerIdentity(
+                        "Dana Agent", "dana@member.example", "+1 555 0100");
+        LinkedHashMap<String, Executable> invocations = new LinkedHashMap<>();
+        invocations.put("submit", () -> gateway.submit(draft("case-msg", Map.of("88", "SN"))));
+        invocations.put("approve", () -> gateway.approve("tok-a", engineer, "121556608", "x"));
+        invocations.put("reject", () -> gateway.reject("tok-r", engineer, "no"));
+        invocations.put("information", () -> gateway.requestInformation("tok-i", engineer, "what?"));
+        assertEquals(SdkTsanetGateway.MUTATING_OPS, invocations.keySet(),
+                "every op in MUTATING_OPS needs a message probe; add the new op's invocation here");
+
+        forms.onFetch = () -> formWithField(88);
+        for (Map.Entry<String, Executable> entry : invocations.entrySet()) {
+            String op = entry.getKey();
+
+            inject(op, () -> HttpServerErrorException.create(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "boom", HttpHeaders.EMPTY, new byte[0], null));
+            GatewayTimeoutException ambiguous = assertThrows(GatewayTimeoutException.class,
+                    entry.getValue(), op + " on a 500 must be ambiguous");
+            assertTrue(ambiguous.getMessage().contains("(" + op + ")"),
+                    op + "'s ambiguity card must name the op the agent performed: "
+                            + ambiguous.getMessage());
+
+            inject(op, () -> new ResourceAccessException("connection died"));
+            GatewayTimeoutException unreachable = assertThrows(GatewayTimeoutException.class,
+                    entry.getValue(), op + " unreachable must be ambiguous");
+            assertTrue(unreachable.getMessage().contains("(" + op + ")"),
+                    op + "'s unreachable card must name the op: " + unreachable.getMessage());
+
+            inject(op, () -> HttpClientErrorException.create(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "unprocessable", HttpHeaders.EMPTY, new byte[0], null));
+            GatewayException definitive = assertThrows(GatewayException.class, entry.getValue());
+            assertFalse(definitive instanceof GatewayTimeoutException,
+                    op + ": a 422 is definitive — it is where the email-domain rule lands");
+            assertTrue(definitive.getMessage().contains("(HTTP 422, " + op + ")"),
+                    op + "'s rejection card must name the op: " + definitive.getMessage());
+            assertEquals("submit".equals(op),
+                    definitive.getMessage().contains("reselect the partner"),
+                    "the form-changed hint is submit-flow advice; on " + op
+                            + " it is misdirection: " + definitive.getMessage());
+            clearInjection(op);
+        }
+    }
+
+    /** Routes a failure into whichever stub the op actually calls through. */
+    private void inject(String op, Supplier<RuntimeException> failure) {
+        if ("submit".equals(op)) {
+            collaborations.onCreate = form -> {
+                throw failure.get();
+            };
+        } else {
+            caseResponses.failWith = failure.get();
+        }
+    }
+
+    private void clearInjection(String op) {
+        if ("submit".equals(op)) {
+            collaborations.onCreate = form -> status("case-msg", "TSA-MSG", true);
+        } else {
+            caseResponses.failWith = null;
+        }
+    }
+
     // ---- 401 recovery ----
 
     @Test
