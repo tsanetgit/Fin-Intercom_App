@@ -86,7 +86,7 @@ class LandingBookkeepingFaultTest {
     }
 
     private String submitBody(String flowId, String componentId, String inputValuesJson) {
-        return "{\"workspace_id\":\"w1\",\"admin\":{\"email\":\"agent@tsanet.org\"},"
+        return "{\"workspace_id\":\"w1\",\"admin\":{\"name\":\"Agent A\",\"email\":\"agent@tsanet.org\"},"
                 + "\"conversation\":{\"id\":42},"
                 + "\"component_id\":\"" + componentId + "\","
                 + "\"current_canvas\":{\"stored_data\":{\"flow_id\":\"" + flowId + "\"}},"

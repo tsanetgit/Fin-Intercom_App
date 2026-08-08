@@ -28,8 +28,10 @@ import org.tsanet.connector.tsanet.dto.SubmissionResult;
  * throws GatewayTimeoutException, simulating the succeeded-but-client-timed-out case
  * that findSubmission must reconcile; a summary containing "timeout-lost" throws the
  * same WITHOUT recording, simulating a request that died in transit so the reconcile
- * lookup finds nothing. The partner "Unsupported Co" returns a form with a FILES field
- * to exercise the loud unsupported-type failure.
+ * lookup finds nothing; a summary containing "domain-check" rejects definitively
+ * (nothing recorded) unless the draft's submitter email is on sdk1.com, mirroring the
+ * live email-domain rule. The partner "Unsupported Co" returns a form with a FILES
+ * field to exercise the loud unsupported-type failure.
  */
 @Component
 @ConditionalOnProperty(name = "connector.tsanet.mode", havingValue = "fake", matchIfMissing = true)
@@ -104,6 +106,12 @@ public class FakeTsanetGateway implements TsanetGateway {
     public SubmissionResult submit(SubmissionDraft draft) {
         this.lastDraft = draft;
         String summary = draft.summary() == null ? "" : draft.summary().toLowerCase();
+        if (summary.contains("domain-check") && !draft.submitterEmail().endsWith("@sdk1.com")) {
+            // Definitive pre-create rejection, like the live rule: no case exists after this.
+            throw new GatewayException("Connect API rejected the request (HTTP 400, submit): Invalid"
+                    + " email address: " + draft.submitterEmail()
+                    + ". Reason: Email must be from the company domain: sdk1.com");
+        }
         if (summary.contains("timeout-lost")) {
             throw new GatewayTimeoutException("injected submit timeout (request lost in transit)");
         }

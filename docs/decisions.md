@@ -798,3 +798,32 @@ collaboration. The `/closure` endpoint documents only 200/400, so an invalid tra
 is not distinguishable from any other bad request — which makes guessing the policy
 expensive to get wrong.
 
+
+## D19. The outbound submitter identity is prefilled and editable, like the engineer identity
+
+D15 records why the inbound engineer identity is a default, not a lock: the Connect
+API rejects submitter and engineer emails off the authenticated member's registered
+domain, no status code conveys the rule, and the connector cannot know the registered
+domains — the problem+json `detail` is the only signal. The outbound submitter had
+shipped without that lesson: `draftFrom` read `submitterContactDetails` straight from
+the canvas payload's `admin` object, so the submitter was locked to the acting
+teammate's Intercom login. Any teammate whose login is off the member's domain got a
+rejection whose message says "fix and resubmit" over a form with nothing editable
+controlling the rejected value. Found by the first live off-domain click (2026-08-07,
+shawn@tsanet.org against the sdk1 test member); no earlier run had hit it because the
+exit E2E injects an on-domain address as the canvas admin.
+
+So the outbound form now renders submitter name and email, prefilled from the acting
+teammate, editable, and required — resolved as typed-wins-over-default at every use
+site (render prefill, validation, draft), reading the typed value from server-side
+state rather than the request's inputs so it also rides `retry_submit`, whose canvas
+has no input fields to echo it. The single failure-notice slot renders directly above
+the identity fields, so the domain rejection lands beside what fixes it. The identity
+deliberately survives a partner re-select (`clearFieldValues()` drops only `f_*` keys;
+who is submitting does not change with the partner), and the `f_` filter in
+`draftFrom` keeps the identity keys out of partner custom fields. The submission
+link's `adminEmail` still records the acting teammate's login, on purpose: the link
+audits who drove the submission; the draft carries who TSANet shows to the partner.
+On `retry_submit`, or a status check that lands the case, that is the teammate whose
+request LANDED it — who can differ from both the original clicker and the drafted
+submitter. That divergence is the audit meaning, not a bug.

@@ -367,4 +367,109 @@ class OutboundFlowTest {
         assertTrue(allText(rendered).contains("NetApp | Storage Division"),
                 "the current step (the form) must re-render instead of home");
     }
+
+    @Test
+    void formPrefillsSubmitterIdentityAndItSurvivesPartnerChange() throws Exception {
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        JsonNode form = submit(flow, "select:1042|512", "{}");
+        assertEquals("Agent A", componentValue(form, CanvasController.FIELD_SUBMITTER_NAME),
+                "submitter name must prefill from the acting teammate");
+        assertEquals("agent@tsanet.org", componentValue(form, CanvasController.FIELD_SUBMITTER_EMAIL),
+                "submitter email must prefill from the acting teammate");
+
+        // A typed correction sticks: stored on the failed-validation submit, and a
+        // partner change must NOT drop it — who is submitting is form-agnostic
+        // (clearFieldValues drops only f_* keys).
+        submit(flow, "submit_case", "{\"summary\":\"\",\"description\":\"\","
+                + "\"submitter_email\":\"typed@sdk1.com\"}");
+        JsonNode otherPartner = submit(flow, "select:1042|513", "{}");
+        assertEquals("typed@sdk1.com", componentValue(otherPartner, CanvasController.FIELD_SUBMITTER_EMAIL),
+                "a typed submitter email must survive a partner re-select");
+    }
+
+    @Test
+    void offDomainRejectionKeepsTypedIdentityAndResubmitCarriesTheCorrection() throws Exception {
+        // The live scenario this feature exists for: the teammate's login is off the
+        // member's registered domain, the API rejects definitively, and the fix is one
+        // email correction and a resubmit — on the same flow, no starting over.
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:1042|512", "{}");
+
+        JsonNode rejected = submit(flow, "submit_case",
+                "{\"summary\":\"domain-check latency\",\"description\":\"d\",\"f_88\":\"SN-9\",\"f_89\":\"High\","
+                        + "\"submitter_name\":\"Agent A\",\"submitter_email\":\"eng@wrong.example\"}");
+        String rejectedText = allText(rejected);
+        assertTrue(rejectedText.contains("Email must be from the company domain"),
+                "the API's domain rule must reach the agent");
+        assertTrue(rejectedText.contains("eng@wrong.example"), "the rejected address must be named");
+        assertEquals("eng@wrong.example", componentValue(rejected, CanvasController.FIELD_SUBMITTER_EMAIL),
+                "the typed value must survive the rejection re-render");
+        assertEquals("eng@wrong.example", gateway.lastDraft().submitterEmail(),
+                "the typed email must be what the gateway actually saw");
+
+        JsonNode confirmed = submit(flow, "submit_case",
+                "{\"summary\":\"domain-check latency\",\"description\":\"d\",\"f_88\":\"SN-9\",\"f_89\":\"High\","
+                        + "\"submitter_name\":\"Agent A\",\"submitter_email\":\"eng@sdk1.com\"}");
+        assertTrue(allText(confirmed).contains("Case submitted"),
+                "a corrected email must be able to resubmit the same flow");
+        assertEquals("eng@sdk1.com", gateway.lastDraft().submitterEmail());
+        assertEquals(java.util.Set.of("88", "89"), gateway.lastDraft().values().keySet(),
+                "submitter identity keys must never leak into partner custom fields");
+    }
+
+    @Test
+    void untypedSubmitterFallsBackToTheActingTeammate() throws Exception {
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:1042|512", "{}");
+        JsonNode confirmed = submit(flow, "submit_case",
+                "{\"summary\":\"fallback ok\",\"description\":\"d\",\"f_88\":\"SN-10\",\"f_89\":\"Low\"}");
+        assertTrue(allText(confirmed).contains("Case submitted"));
+        assertEquals("Agent A", gateway.lastDraft().submitterName());
+        assertEquals("agent@tsanet.org", gateway.lastDraft().submitterEmail(),
+                "with nothing typed, the teammate default must ride the draft unchanged");
+    }
+
+    @Test
+    void missingIdentityJoinsTheRequiredListAndNeverReachesTheGateway() throws Exception {
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:1042|512", "{}");
+
+        // Wrong-but-well-formed: a valid submit whose payload carries no admin object
+        // and no typed identity. The old code shipped it with an empty submitter.
+        var before = gateway.lastDraft();
+        JsonNode invalid = post("/canvas/submit", "{\"workspace_id\":\"w1\",\"component_id\":\"submit_case\","
+                + "\"current_canvas\":{\"stored_data\":{\"flow_id\":\"" + flow + "\"}},"
+                + "\"input_values\":{\"summary\":\"s\",\"description\":\"d\",\"f_88\":\"SN-11\",\"f_89\":\"Low\"}}");
+        String text = allText(invalid);
+        assertTrue(text.contains("Missing required:"));
+        assertTrue(text.contains("Your name"));
+        assertTrue(text.contains("Your email"));
+        assertTrue(before == gateway.lastDraft(),
+                "a submission with no resolvable identity must not reach the gateway");
+    }
+
+    @Test
+    void typedIdentityRidesRetrySubmitFromStateNotInputs() throws Exception {
+        // retry_submit's canvas has no input fields, so the identity must come from the
+        // server-side values snapshot — the current request only supplies the teammate
+        // default, which here is a DIFFERENT address than the one typed.
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:1042|512", "{}");
+        submit(flow, "submit_case",
+                "{\"summary\":\"please timeout-lost now\",\"description\":\"d\",\"f_88\":\"SN-12\",\"f_89\":\"Low\","
+                        + "\"submitter_email\":\"eng@sdk1.com\"}");
+        assertTrue(gateway.findSubmission(flow).isEmpty(), "the lost request must not have recorded a case");
+
+        submit(flow, "check_status", "{}");
+        submit(flow, "retry_submit", "{}");
+        assertEquals("eng@sdk1.com", gateway.lastDraft().submitterEmail(),
+                "the typed email must ride the retry draft, not the retry payload's teammate default");
+        assertEquals("Agent A", gateway.lastDraft().submitterName(),
+                "an untyped name still falls back to the acting teammate on the same draft");
+    }
 }

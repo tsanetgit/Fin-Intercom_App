@@ -91,7 +91,7 @@ public class CanvasController {
             if (status == Status.SUBMITTING || status == Status.UNRESOLVED) {
                 // Starting over here would mint a fresh flow id == fresh
                 // internalCaseNumber and orphan the possibly-created case.
-                return renderByStatus(state, surface, null);
+                return renderByStatus(state, payload, surface, null);
             }
             // New flow id on purpose: internalCaseNumber == flowId, one per submission.
             return home(flows.create(), surface, null);
@@ -102,20 +102,20 @@ public class CanvasController {
         if (state.status() != Status.DRAFT) {
             // Search/select/submit from a stale view of a flow whose submission is in
             // flight, unresolved, or landed: render the truth instead of acting.
-            return renderByStatus(state, surface, null);
+            return renderByStatus(state, payload, surface, null);
         }
         if ("search".equals(component)) {
             return doSearch(state, surface, inputs.getOrDefault("q", "").trim());
         }
         if (component.startsWith("select:")) {
-            return doSelect(state, surface, component.substring("select:".length()));
+            return doSelect(state, payload, surface, component.substring("select:".length()));
         }
         if ("submit_case".equals(component) || "retry_submit".equals(component)) {
             return doSubmit(state, payload, inputs, "retry_submit".equals(component));
         }
         // Unknown component (live Canvas Kit shapes may surprise us, D8): re-render the
         // current step rather than destroying the flow and the agent's typed work.
-        return renderByStatus(state, surface, null);
+        return renderByStatus(state, payload, surface, null);
     }
 
     // ---- steps ----
@@ -168,7 +168,8 @@ public class CanvasController {
         return hit.companyId() + "|" + (hit.departmentId() == null ? "" : hit.departmentId());
     }
 
-    private Map<String, Object> doSelect(OutboundFlowState state, String surface, String key) {
+    private Map<String, Object> doSelect(OutboundFlowState state, Map<String, Object> payload,
+            String surface, String key) {
         PartnerHit partner = state.hits().stream()
                 .filter(hit -> contentKey(hit).equals(key))
                 .findFirst()
@@ -211,7 +212,7 @@ public class CanvasController {
             // Set as a pair under the monitor: form must always match partner.
             state.partner(partner);
             state.form(form);
-            return formCanvas(state, null);
+            return formCanvas(state, payload, null);
         }
     }
 
@@ -220,13 +221,25 @@ public class CanvasController {
                 && Objects.equals(a.departmentId(), b.departmentId());
     }
 
-    private Map<String, Object> formCanvas(OutboundFlowState state, String notice) {
+    /** Reserved input ids on the outbound form; the f_ prefix keeps real form fields clear of them. */
+    static final String FIELD_SUBMITTER_NAME = "submitter_name";
+    static final String FIELD_SUBMITTER_EMAIL = "submitter_email";
+
+    private Map<String, Object> formCanvas(OutboundFlowState state, Map<String, Object> payload, String notice) {
         ProcessForm form = state.form();
         List<Map<String, Object>> components = new ArrayList<>();
         components.add(CanvasKit.header(state.partner().display()));
         if (notice != null) {
             components.add(CanvasKit.error(notice));
         }
+        // Prefilled from the acting teammate but editable (D19; the inbound engineer
+        // identity's rule): the Connect API rejects submitter emails off the member's
+        // registered domain, and the domains are not knowable here. The notice slot
+        // above is where that rejection renders — directly beside the fields that fix it.
+        components.add(CanvasKit.input(FIELD_SUBMITTER_NAME, "Your name (required)", null,
+                submitterName(state, payload)));
+        components.add(CanvasKit.input(FIELD_SUBMITTER_EMAIL, "Your email (required)", null,
+                submitterEmail(state, payload)));
         addNoteComponents(components, "Partner note: ", form.adminNote());
         addNoteComponents(components, "Escalation: ", form.escalationInstructions());
         components.add(CanvasKit.input("summary", "Problem summary (required)", "One line", state.values().get("summary")));
@@ -523,6 +536,14 @@ public class CanvasController {
                     state.values().putAll(inputs);
                 }
                 List<String> missing = new ArrayList<>();
+                // Resolved like the render prefill: a blank typed value with a present
+                // teammate default is valid, matching the inbound engineer identity.
+                if (blank(submitterName(state, payload))) {
+                    missing.add("Your name");
+                }
+                if (blank(submitterEmail(state, payload))) {
+                    missing.add("Your email");
+                }
                 if (blank(state.values().get("summary"))) {
                     missing.add("Problem summary");
                 }
@@ -538,11 +559,11 @@ public class CanvasController {
                     }
                 }
                 if (!missing.isEmpty()) {
-                    renderedUnderLock = formCanvas(state, "Missing required: " + String.join(", ", missing));
+                    renderedUnderLock = formCanvas(state, payload, "Missing required: " + String.join(", ", missing));
                 } else if (!state.beginSubmit()) {
                     // The one legal submit is claiming DRAFT -> SUBMITTING; losing the
                     // claim means another view already submitted (or the outcome is known).
-                    renderedUnderLock = renderByStatus(state, surface(payload), null);
+                    renderedUnderLock = renderByStatus(state, payload, surface(payload), null);
                 } else {
                     draft = draftFrom(state, payload);
                 }
@@ -566,7 +587,7 @@ public class CanvasController {
             // Per TsanetGateway.submit's contract, reaching here means the API
             // definitively rejected the request before a case could exist.
             state.submitFailed();
-            return formCanvas(state, "Submission failed (" + e.getMessage() + "); fix and resubmit.");
+            return formCanvas(state, payload, "Submission failed (" + e.getMessage() + "); fix and resubmit.");
         } catch (RuntimeException e) {
             // tsanetgit/Fin-Intercom_App#2: an exception outside the gateway taxonomy
             // is by definition an ambiguous outcome (the taxonomy's own rule). Without
@@ -637,7 +658,7 @@ public class CanvasController {
                             // already re-armed: render the current step with a neutral
                             // truth, never copy that invites a "retry" that would be a
                             // FIRST submission (QA round-2 note).
-                            default -> renderByStatus(state, surface,
+                            default -> renderByStatus(state, payload, surface,
                                     "No case exists for this flow yet.");
                         };
                     });
@@ -649,12 +670,13 @@ public class CanvasController {
         }
     }
 
-    private Map<String, Object> renderByStatus(OutboundFlowState state, String surface, String notice) {
+    private Map<String, Object> renderByStatus(OutboundFlowState state, Map<String, Object> payload,
+            String surface, String notice) {
         return switch (state.status()) {
             case LANDED -> confirmation(state);
             case UNRESOLVED -> pendingCanvas(state);
             case SUBMITTING -> inProgressCanvas(state);
-            case DRAFT -> state.form() != null ? formCanvas(state, notice)
+            case DRAFT -> state.form() != null ? formCanvas(state, payload, notice)
                     : !state.hits().isEmpty() ? resultsCanvas(state, notice)
                     : home(state, surface, notice);
         };
@@ -753,9 +775,10 @@ public class CanvasController {
         return o instanceof Map<?, ?> map && map.get("id") != null ? String.valueOf(map.get("id")) : null;
     }
 
+    /** The acting teammate's login, on purpose — the link audits who drove the
+     * submission, while the draft's (possibly edited) submitter is what TSANet shows. */
     private static String adminEmail(Map<String, Object> payload) {
-        return payload.get("admin") instanceof Map<?, ?> admin && admin.get("email") != null
-                ? String.valueOf(admin.get("email")) : null;
+        return adminString(payload, "email");
     }
 
     // ---- plumbing ----
@@ -769,17 +792,39 @@ public class CanvasController {
         Map<String, String> fieldValues = state.values().entrySet().stream()
                 .filter(e -> formKeys.contains(e.getKey()))
                 .collect(Collectors.toMap(e -> e.getKey().substring(2), Map.Entry::getValue));
-        Map<?, ?> admin = payload.get("admin") instanceof Map<?, ?> m ? m : Map.of();
-        Object name = admin.get("name");
-        Object email = admin.get("email");
+        String name = submitterName(state, payload);
+        String email = submitterEmail(state, payload);
         return new SubmissionDraft(
                 state.flowId(),
                 state.form().documentId(),
                 state.values().get("summary"),
                 state.values().get("description"),
                 fieldValues,
-                name == null ? "" : String.valueOf(name),
-                email == null ? "" : String.valueOf(email));
+                name == null ? "" : name,
+                email == null ? "" : email);
+    }
+
+    /**
+     * Typed values win over the teammate default, so a correction survives a re-render
+     * (the inbound engineer identity's rule, D19 for the outbound side). Reads the
+     * typed value from server-side state, not the request's inputs, so the identity
+     * also rides retry_submit — whose canvas has no input fields to echo it.
+     */
+    private static String submitterName(OutboundFlowState state, Map<String, Object> payload) {
+        return firstNonBlank(state.values().get(FIELD_SUBMITTER_NAME), adminString(payload, "name"));
+    }
+
+    private static String submitterEmail(OutboundFlowState state, Map<String, Object> payload) {
+        return firstNonBlank(state.values().get(FIELD_SUBMITTER_EMAIL), adminString(payload, "email"));
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        return a != null && !a.isBlank() ? a : b;
+    }
+
+    private static String adminString(Map<String, Object> payload, String key) {
+        return payload.get("admin") instanceof Map<?, ?> admin && admin.get(key) != null
+                ? String.valueOf(admin.get(key)) : null;
     }
 
     private static Map<String, Object> pointer(OutboundFlowState state) {

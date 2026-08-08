@@ -103,11 +103,11 @@ class AnnotationFlowTest {
 
     @Test
     void conversationSurfaceLinksWithoutATicket() throws Exception {
-        String body = "{\"workspace_id\":\"w-test\",\"admin\":{\"email\":\"agent@tsanet.org\"},"
+        String body = "{\"workspace_id\":\"w-test\",\"admin\":{\"name\":\"Agent A\",\"email\":\"agent@tsanet.org\"},"
                 + "\"conversation\":{\"id\":777222}}";
         String home = post("/canvas/initialize", body);
         String flow = home.replaceAll("(?s).*\"flow_id\":\"([^\"]+)\".*", "$1");
-        String convBody = "{\"workspace_id\":\"w-test\",\"admin\":{\"email\":\"agent@tsanet.org\"},"
+        String convBody = "{\"workspace_id\":\"w-test\",\"admin\":{\"name\":\"Agent A\",\"email\":\"agent@tsanet.org\"},"
                 + "\"conversation\":{\"id\":777222},"
                 + "\"component_id\":\"%s\","
                 + "\"current_canvas\":{\"stored_data\":{\"flow_id\":\"" + flow + "\"}},"
