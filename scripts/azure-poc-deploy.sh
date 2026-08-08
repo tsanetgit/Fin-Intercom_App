@@ -76,8 +76,17 @@ az provider register -n Microsoft.OperationalInsights --wait -o none
 echo "== container registry $ACR (Basic — the PoC's one steady cost, ~\$5/mo)"
 az acr create -g "$RG" -n "$ACR" --sku Basic --admin-enabled true -o none
 
-echo "== building image in ACR (linux/amd64 built cloud-side; uploads the repo incl. the jar)"
-az acr build -r "$ACR" -t "$IMAGE_TAG" -f Dockerfile . -o none
+# az acr build is NOT used: ACR Tasks are blocked on free/trial subscriptions
+# (TasksOperationsNotAllowed, hit live 2026-08-08) — an anti-abuse measure, and the
+# suggested support ticket is not worth a PoC's time. Build locally for linux/amd64
+# (the RUN steps are trivial enough that QEMU emulation on Apple Silicon is fine)
+# and push. Requires Docker Desktop running.
+echo "== building image locally (linux/amd64) and pushing to $ACR"
+command -v docker >/dev/null || die "docker not installed"
+docker info >/dev/null 2>&1 || die "docker daemon not running — start Docker Desktop"
+az acr login -n "$ACR"
+docker build --platform linux/amd64 -t "$ACR.azurecr.io/$IMAGE_TAG" .
+docker push "$ACR.azurecr.io/$IMAGE_TAG"
 
 echo "== container apps environment $ACA_ENV"
 az containerapp env create -g "$RG" -n "$ACA_ENV" -l "$LOC" -o none
