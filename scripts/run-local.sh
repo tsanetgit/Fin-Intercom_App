@@ -76,6 +76,16 @@ export INTERCOM_ACCESS_TOKEN="$INTERCOM_DEV_ACCESS_TOKEN"
 # workspace. Per-workspace: the pilot's id will differ.
 export INTERCOM_COLLABORATION_TICKET_TYPE_ID="${INTERCOM_COLLABORATION_TICKET_TYPE_ID:-4561712}"
 
+# The ticket state a partner-closed case moves to (docs/decisions.md D17/D18).
+# Also per-workspace, and unlike most ids it is not conveniently discoverable: state
+# ids are only enumerable under `Intercom-Version: Unstable`, so they are resolved out
+# of band. Defaulted here for the SAME reason the ticket type is — unset means inbound
+# closure REFUSES every event and leaves tickets open, logging closure_unconfigured,
+# which is precisely the quiet-wrong-default this script exists to stop.
+# Dev workspace, type 4561712: Submitted 9619796, In progress 9619797,
+# Waiting on customer 9619798, Resolved 9619799.
+export INTERCOM_RESOLVED_STATE_ID="${INTERCOM_RESOLVED_STATE_ID:-9619799}"
+
 # THE POINT OF THIS SCRIPT. Absolute path, because a relative one resolves
 # against the working directory — which in a container is the overlay
 # filesystem the durable store exists to avoid (docs/decisions.md D12).
@@ -94,6 +104,7 @@ echo "connector    : $JAR"
 echo "port         : $PORT"
 echo "link store   : sqlite at $CONNECTOR_LINKS_SQLITE_PATH"
 echo "ticket type  : $INTERCOM_COLLABORATION_TICKET_TYPE_ID"
+echo "resolved st. : $INTERCOM_RESOLVED_STATE_ID"
 echo "log          : $LOG"
 echo
 
