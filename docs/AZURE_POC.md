@@ -68,6 +68,15 @@ annotations. If the app's credentials rotate, update `.env` and re-run the deplo
   within one poller cycle (5 min) if push missed. The ticket's panel offers
   Accept / Request information / Decline with an editable engineer identity.
 
+## Precondition: one live connector per member
+
+This must be the **only** connector instance running against the sdk1 member.
+A second instance with its own link table (any other deployment of this repo
+pointed at the same credentials) races the poller and double-creates tickets for
+inbound cases — D14's unique-token claim protects each instance against its own
+duplicates, not two instances against each other. Before enabling this
+environment, confirm nothing else polls or receives webhooks as sdk1.
+
 ## 5. Teardown
 
 ```bash

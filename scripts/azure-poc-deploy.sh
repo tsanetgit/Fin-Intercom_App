@@ -111,10 +111,19 @@ if [ -n "$FQDN" ]; then
   CALLBACK="https://$FQDN/webhooks/tsanet"
   EXISTING="$(curl -s -A "$UA" "$TSANET_SDK1_API_URL/v2/webhooks" \
     -H "Authorization: Bearer $TSANET_TOKEN")"
+  # Three-valued on purpose: a list that cannot be parsed must NOT read as
+  # "already exists" — that would skip registration while reporting success.
   HAS="$(printf '%s' "$EXISTING" | python3 -c "
 import json,sys
-subs=json.load(sys.stdin)
-print(any(s.get('callbackUrl')=='$CALLBACK' and s.get('active') for s in subs))")"
+try:
+    subs=json.load(sys.stdin)
+    print(any(s.get('callbackUrl')=='$CALLBACK' and s.get('active') for s in subs))
+except Exception:
+    print('PARSE_FAILED')")"
+  case "$HAS" in
+    True|False) ;;
+    *) die "could not list v2 webhooks (unparseable response); refusing to guess: $EXISTING" ;;
+  esac
   if [ "$HAS" = "False" ]; then
     WEBHOOK_SECRET="$(curl -s -A "$UA" -X POST "$TSANET_SDK1_API_URL/v2/webhooks" \
       -H "Authorization: Bearer $TSANET_TOKEN" -H 'content-type: application/json' \
