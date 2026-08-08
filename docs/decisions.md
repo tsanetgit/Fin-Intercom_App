@@ -681,6 +681,10 @@ Instead the condition is made alertable: `consecutiveHeld` counts consecutive co
 listings that observed an unanchored claim (climbing while `consecutiveFailures` sits at
 0 is the orphan signature), and the held cycle line carries the oldest claim's age — a
 live create resolves within its gateway deadline, so an age far past it means orphan.
+The one subclass the counter structurally cannot see — an orphaned claim on a case that
+then went TERMINAL, which the #28 prefilter advances past rather than holding on — is
+named by `reconcile_orphaned_claim_terminal` at the moment the prefilter passes it,
+because after that the case leaves the window and the stale row goes invisible.
 The counter measures claim staleness, not cycle health: a dirty cycle or a
 cursor-persist-failure cycle that observed no claims still resets it, on purpose — do
 not "fix" that. Releasing an orphan stays a human action, taken by someone who can see

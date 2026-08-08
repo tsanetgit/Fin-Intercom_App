@@ -155,6 +155,16 @@ public class ReconciliationPoller {
                 // same guard for the push path; without THIS one, every partner-closed
                 // unlinked case would count as failed and wedge the cursor forever —
                 // the outcome check below reads no-link-after-handle as a failed create.
+                //
+                // The one surface such an orphan gets: once the cursor passes, the case
+                // leaves the window and the stale claim row goes invisible, so it is
+                // named here while still listed (#26's held counter never sees it —
+                // this branch deliberately skips before inFlight is counted).
+                links.byToken(c.token())
+                        .filter(l -> !l.ticketAnchored())
+                        .ifPresent(l -> log.warn("tsanet_audit event=reconcile_orphaned_claim_terminal"
+                                        + " token={} status={} claim_age_s={} action=release_by_hand",
+                                c.token(), c.status(), claimAgeSeconds(l.submittedAt())));
                 skippedTerminal++;
                 high = newest(high, c);
                 continue;

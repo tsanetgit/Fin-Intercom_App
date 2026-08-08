@@ -58,11 +58,12 @@ public record InboundCase(
 
     /**
      * True when the case's lifecycle is over and no ticket should ever be created for
-     * it (#28). CLOSED and REJECTED: D17 already maps both to Resolved, so the codebase
-     * already treats them as terminal — and if the API ever allowed a reversal, the
-     * status change bumps {@code updatedAt} and re-surfaces the case past any advanced
-     * cursor, so this classification has no permanent-loss mode. PENDINGACTION stays
-     * out: undocumented in both contracts and deliberately unmapped (D17).
+     * it (#28). CLOSED and REJECTED: D17 already maps both to Resolved, which is what
+     * this classification rests on. Whether the API even allows a reversal is
+     * unverified — if it did, and a status change bumps {@code updatedAt} the way
+     * other case updates do (also unverified; creation and SLA sweeps are the probed
+     * writers), the case would re-surface past any advanced cursor. PENDINGACTION
+     * stays out: undocumented in both contracts and deliberately unmapped (D17).
      */
     public boolean terminal() {
         return status == Status.CLOSED || status == Status.REJECTED;
