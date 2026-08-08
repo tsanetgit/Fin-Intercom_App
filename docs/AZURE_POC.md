@@ -15,6 +15,10 @@ before drawing conclusions from the PoC.
   (180k vCPU-s / 360k GiB-s / 2M requests per month) is what the on-demand shape
   lives inside.
 - `brew install azure-cli` if absent, then `az login` on the Mac mini.
+- **Docker Desktop must be running.** The image is built locally and pushed —
+  `az acr build` is unavailable because ACR Tasks are blocked on free/trial
+  subscriptions (`TasksOperationsNotAllowed`, hit live on this account's first
+  deploy) — and the script hard-stops with a clear message if the daemon is down.
 
 ## 2. Deploy
 
