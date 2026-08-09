@@ -43,9 +43,11 @@ public class SignatureVerificationFilter extends OncePerRequestFilter {
                     ConnectorProperties::tsanetWebhookSecret));
 
     private final ConnectorProperties properties;
+    private final NonceRegistry nonces;
 
-    public SignatureVerificationFilter(ConnectorProperties properties) {
+    public SignatureVerificationFilter(ConnectorProperties properties, NonceRegistry nonces) {
         this.properties = properties;
+        this.nonces = nonces;
     }
 
     /** The only unauthenticated paths (exact match on the normalized path). */
@@ -75,11 +77,22 @@ public class SignatureVerificationFilter extends OncePerRequestFilter {
             }
             String query = request.getQueryString();
             String requestTarget = query == null ? request.getRequestURI() : request.getRequestURI() + "?" + query;
-            String code = AdminSignatures.verify(
-                    request.getHeader(AdminSignatures.TIMESTAMP_HEADER),
-                    request.getHeader(AdminSignatures.SIGNATURE_HEADER),
-                    request.getMethod(), requestTarget, body,
-                    properties.adminApiSecret(), java.time.Instant.now().getEpochSecond());
+            // Non-GET admin requests are write-class (docs/decisions.md D21): they
+            // carry the nonce inside the signed material and burn it exactly once.
+            boolean readClass = "GET".equalsIgnoreCase(request.getMethod())
+                    || "HEAD".equalsIgnoreCase(request.getMethod());
+            String code = readClass
+                    ? AdminSignatures.verify(
+                            request.getHeader(AdminSignatures.TIMESTAMP_HEADER),
+                            request.getHeader(AdminSignatures.SIGNATURE_HEADER),
+                            request.getMethod(), requestTarget, body,
+                            properties.adminApiSecret(), java.time.Instant.now().getEpochSecond())
+                    : AdminSignatures.verifyWriteClass(
+                            request.getHeader(AdminSignatures.TIMESTAMP_HEADER),
+                            request.getHeader(AdminSignatures.SIGNATURE_HEADER),
+                            request.getHeader(AdminSignatures.NONCE_HEADER),
+                            request.getMethod(), requestTarget, body,
+                            properties.adminApiSecret(), java.time.Instant.now().getEpochSecond(), nonces);
             if (code != null) {
                 log.warn("rejecting {}: admin auth failed ({})", request.getRequestURI(), code);
                 reject(response, HttpServletResponse.SC_UNAUTHORIZED, code);

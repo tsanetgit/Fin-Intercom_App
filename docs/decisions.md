@@ -905,3 +905,38 @@ allowlist of non-secret properties plus `{present}` markers for a curated list o
 secrets; nothing enumerates property sources, because the sources contain the whole
 process environment and enumeration is how secrets leak. Log tails may contain case
 fragments; the admin signature is the control, and the contract says so.
+
+## D21. Credential validation: probe live, apply nothing, and the nonce is signed material
+
+The admin plane's write half validates credentials without applying them
+(`POST /admin/credentials/{name}/validate`, Connect_Gateway admin contract). The
+fork this settles: hot-applying in memory manufactures silent divergence (a restart
+reverts to the deployment secret and nobody correlates), and durable-applying grows
+a second source of truth plus credentials-at-rest on the file share, which is a
+security-posture conversation, not a slice. Validation is the capability that was
+actually missing - the smart-quote incident applied an UNVALIDATED value - and
+apply keeps its one proven path: the deploy tooling writing the ACA secret store.
+The verdict wording carries this ("this verdict changed nothing"), because a green
+check that reads as "rotation done" would recreate the divergence class by UX.
+
+**Write-class requests sign the nonce.** Non-GET admin requests carry X-Admin-Nonce
+as the FOURTH line of the canonical string (contract vector 4): a nonce checked
+outside the signature is decoration, since the signed parts replay under a fresh
+one. `NonceRegistry` burns a nonce exactly once per freshness window, bounded,
+REJECTING when full - evict-oldest would fail open, because flooding ages out the
+nonce an attacker wants to replay - and burns only AFTER the signature verifies, so
+unauthenticated garbage cannot consume capacity. In-memory on the single-replica
+adapter; the accepted, contract-stated consequence is that a restart reopens at
+most one 300s window for previously seen nonces.
+
+**Probeable credentials only, with identity echoed.** intercom-access-token probes
+GET /me; tsanet-credential probes a real login. The verdict echoes who the platform
+says the credential IS, so a valid-but-wrong credential is visible - and the TSANet
+identity is labeled identity-only, because /v1/me is not role-gated and a 200 there
+proves nothing about business authorization. Signing secrets answer 400
+not_validatable rather than pretending: a "syntactically plausible" checkmark is
+worse than absence. The admin secret's exclusion also removes the
+rotate-yourself-into-lockout path. Per-name probes are rate-bounded (10s) because
+repeated failed logins against a real IdP can trip account lockout. The staged
+value lives in memory for one round-trip: never logged (the audit line carries
+name/verdict/latency only), never persisted, never echoed.

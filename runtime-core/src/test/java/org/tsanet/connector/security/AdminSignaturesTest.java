@@ -80,6 +80,75 @@ class AdminSignaturesTest {
     }
 
     @Test
+    void vector4WriteClassVerifiesAndBurnsExactlyOnce() {
+        NonceRegistry nonces = new NonceRegistry();
+        byte[] body = "{\"accessToken\":\"probe-me\"}".getBytes(StandardCharsets.UTF_8);
+        String sig = "sha256=aaeb4e1843b3585f5626219f00483cf2fc485fb933e0ac545135b673a49c4fde";
+        assertNull(AdminSignatures.verifyWriteClass("1754700100", sig, "6f1d2a90c3b44e58", "POST",
+                "/admin/credentials/intercom-access-token/validate", body, "vector-secret-2",
+                1754700110L, nonces));
+        assertEquals("replayed_nonce",
+                AdminSignatures.verifyWriteClass("1754700100", sig, "6f1d2a90c3b44e58", "POST",
+                        "/admin/credentials/intercom-access-token/validate", body, "vector-secret-2",
+                        1754700110L, nonces));
+    }
+
+    @Test
+    void aMissingNonceOnAWriteIsItsOwnError() {
+        assertEquals("invalid_nonce",
+                AdminSignatures.verifyWriteClass("1754700100", "sha256=" + "0".repeat(64), null, "POST",
+                        "/admin/credentials/x/validate", new byte[0], "vector-secret-2", 1754700100L,
+                        new NonceRegistry()));
+    }
+
+    @Test
+    void anInvalidSignatureDoesNotBurnTheNonce() {
+        // Burning before verification would let unauthenticated garbage consume
+        // registry capacity AND pre-burn a nonce a legitimate caller is about to use.
+        NonceRegistry nonces = new NonceRegistry();
+        byte[] body = "{\"accessToken\":\"probe-me\"}".getBytes(StandardCharsets.UTF_8);
+        assertEquals("invalid_signature",
+                AdminSignatures.verifyWriteClass("1754700100", "sha256=" + "0".repeat(64), "6f1d2a90c3b44e58",
+                        "POST", "/admin/credentials/intercom-access-token/validate", body,
+                        "vector-secret-2", 1754700110L, nonces));
+        assertNull(AdminSignatures.verifyWriteClass("1754700100",
+                "sha256=aaeb4e1843b3585f5626219f00483cf2fc485fb933e0ac545135b673a49c4fde",
+                "6f1d2a90c3b44e58", "POST", "/admin/credentials/intercom-access-token/validate", body,
+                "vector-secret-2", 1754700110L, nonces),
+                "the nonce survived the failed attempt and works for the real caller");
+    }
+
+    @Test
+    void aReadClassSignatureNeverPassesAWrite() {
+        // Wrong-but-well-formed: valid 4-line signature for the same request, sent
+        // with a nonce header. The nonce must PARTICIPATE, not decorate.
+        NonceRegistry nonces = new NonceRegistry();
+        byte[] body = "{\"accessToken\":\"probe-me\"}".getBytes(StandardCharsets.UTF_8);
+        String readSig = "sha256=" + hmacHexForTest("vector-secret-2",
+                "1754700100\nPOST\n/admin/credentials/intercom-access-token/validate\n"
+                        + "4bcdb69d051520cbe3cc0ccd159243c0038a6479279909ae255c69bd76d3a4ae");
+        assertEquals("invalid_signature",
+                AdminSignatures.verifyWriteClass("1754700100", readSig, "6f1d2a90c3b44e58", "POST",
+                        "/admin/credentials/intercom-access-token/validate", body, "vector-secret-2",
+                        1754700110L, nonces));
+    }
+
+    private static String hmacHexForTest(String secret, String canonical) {
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8),
+                    "HmacSHA256"));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : mac.doFinal(canonical.getBytes(StandardCharsets.UTF_8))) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Test
     void prefixIsCaseTolerant() {
         assertNull(AdminSignatures.verify(Long.toString(V_TS),
                 "SHA256=9872526fb9f10765d3587246dafe069fe0627d2c4cdfbe62620d7a0ccea01c4c", "GET",
