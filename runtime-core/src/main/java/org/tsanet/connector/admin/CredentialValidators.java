@@ -151,9 +151,15 @@ public class CredentialValidators {
     }
 
     private static Verdict failure(String target, long startNanos, Exception e) {
-        // Exception class + message only: JDK client messages name hosts and
-        // timeouts, never the staged credential.
-        return new Verdict(false, target, (System.nanoTime() - startNanos) / 1_000_000, null,
-                e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage()));
+        // Network-class messages (hosts, timeouts) are safe to surface.
+        // IllegalArgumentException is NOT: HttpRequest.Builder embeds the offending
+        // header VALUE in its message, which for the Authorization header is the
+        // staged credential. The controller rejects control characters before any
+        // probe, so this branch is belt-and-braces, but the echo path stays closed
+        // even if a new probe implementation forgets that rule.
+        String detail = e instanceof IllegalArgumentException
+                ? e.getClass().getSimpleName()
+                : e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage());
+        return new Verdict(false, target, (System.nanoTime() - startNanos) / 1_000_000, null, detail);
     }
 }

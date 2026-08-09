@@ -178,6 +178,20 @@ class CredentialValidationTest {
     }
 
     @Test
+    void aControlCharacterValueIsRejectedBeforeAnyProbeAndNeverEchoed() throws Exception {
+        // The advisor-found echo path: a CR/LF token makes HttpRequest.Builder throw
+        // an IllegalArgumentException whose MESSAGE contains the value. The wrong-but-
+        // well-formed input here is a syntactically legal JSON string with a newline.
+        String cr = STAGED_MARKER + "\\nInjected: yes";
+        String body = mvc.perform(signedPost("/admin/credentials/intercom-access-token/validate",
+                        "{\"accessToken\":\"" + cr + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"))
+                .andReturn().getResponse().getContentAsString();
+        assertFalse(body.contains(STAGED_MARKER), "the rejected value must not be echoed either");
+    }
+
+    @Test
     void wrongFieldsAreInvalidRequestNotAProbe() throws Exception {
         mvc.perform(signedPost("/admin/credentials/intercom-access-token/validate",
                         "{\"token\":\"wrong-field-name\"}"))

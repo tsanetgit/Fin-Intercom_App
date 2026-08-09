@@ -24,7 +24,15 @@ public class NonceRegistry {
     private static final Logger log = LoggerFactory.getLogger(NonceRegistry.class);
 
     static final int CAPACITY = 10_000;
-    private static final long TTL_SECONDS = AdminSignatures.FRESHNESS_SECONDS;
+    /**
+     * TWICE the freshness window, not once: freshness accepts future-skewed
+     * timestamps (|now - ts| <= 300), so a request signed 300s in the future stays
+     * verifiable until arrival + 600s. A registry that forgot at arrival + 300s
+     * would hand that request a 300s replay window at the auth layer - a different
+     * hole from the documented restart window. Remember nonces for as long as ANY
+     * signature carrying them could still be fresh.
+     */
+    static final long TTL_SECONDS = 2 * AdminSignatures.FRESHNESS_SECONDS;
 
     private final Map<String, Long> seen = new HashMap<>();
 

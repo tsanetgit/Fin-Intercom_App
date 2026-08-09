@@ -24,13 +24,18 @@ class NonceRegistryTest {
     }
 
     @Test
-    void theWindowForgetsButOnlyAfterTheFreshnessTtl() {
+    void theWindowRemembersThroughMaximumFutureSkew() {
+        // Freshness accepts |now - ts| <= 300, so a future-skewed signature can stay
+        // verifiable until arrival + 2x the window; forgetting sooner would hand it a
+        // replay window at the auth layer.
         NonceRegistry registry = new NonceRegistry();
         assertNull(registry.accept("n1", 1000));
-        assertEquals("replayed_nonce", registry.accept("n1", 1000 + AdminSignatures.FRESHNESS_SECONDS),
-                "inside the window it is still a replay");
-        assertNull(registry.accept("n1", 1000 + AdminSignatures.FRESHNESS_SECONDS + 1),
-                "past the window the nonce is forgotten - freshness has expired the signature anyway");
+        assertEquals("replayed_nonce", registry.accept("n1", 1000 + AdminSignatures.FRESHNESS_SECONDS + 1),
+                "one freshness window later a future-skewed signature could still be fresh: still a replay");
+        assertEquals("replayed_nonce", registry.accept("n1", 1000 + NonceRegistry.TTL_SECONDS),
+                "remembered to the edge of the double window");
+        assertNull(registry.accept("n1", 1000 + NonceRegistry.TTL_SECONDS + 1),
+                "past it, no signature carrying this nonce can be fresh, so it is forgotten");
     }
 
     @Test
@@ -39,7 +44,7 @@ class NonceRegistryTest {
         registry.fillForTest(NonceRegistry.CAPACITY, 2000);
         assertEquals("invalid_nonce", registry.accept("fresh", 2000),
                 "reject-on-full: evicting oldest would let a flood age out the nonce an attacker replays");
-        assertNull(registry.accept("fresh", 2000 + AdminSignatures.FRESHNESS_SECONDS + 1),
+        assertNull(registry.accept("fresh", 2000 + NonceRegistry.TTL_SECONDS + 1),
                 "the window draining restores service");
     }
 }

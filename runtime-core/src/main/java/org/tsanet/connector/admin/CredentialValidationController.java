@@ -54,6 +54,14 @@ public class CredentialValidationController {
                 || body.values().stream().anyMatch(v -> v == null || v.isBlank())) {
             return ResponseEntity.badRequest().body(Map.of("error", "invalid_request"));
         }
+        // Control characters are rejected BEFORE any probe: a CR/LF in a staged value
+        // makes HttpRequest.Builder.header throw an IllegalArgumentException whose
+        // MESSAGE embeds the value - the exact echo path the contract forbids. No
+        // legitimate credential carries control characters.
+        if (body.values().stream().anyMatch(
+                v -> v.chars().anyMatch(c -> c < 0x20 || c == 0x7f))) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid_request"));
+        }
         // The bound is claimed BEFORE the probe so two concurrent submissions cannot
         // both reach the platform inside one interval.
         Instant now = Instant.now();
