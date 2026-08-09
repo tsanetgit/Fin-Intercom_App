@@ -121,4 +121,16 @@ class EndpointSecurityTest {
         mvc.perform(post("/canvas/initialize").contentType(MediaType.APPLICATION_JSON).content(big))
                 .andExpect(status().isPayloadTooLarge());
     }
+
+    @Test
+    void adminFailsClosedWhenNoAdminSecretIsConfigured() throws Exception {
+        // This context sets no connector.admin-api-secret: a fresh, well-formed admin
+        // request must still be refused (D20 — no admin secret means no admin plane).
+        String ts = Long.toString(java.time.Instant.now().getEpochSecond());
+        mvc.perform(get("/admin/info")
+                        .header("X-Admin-Timestamp", ts)
+                        .header("X-Admin-Signature", "sha256=" + "0".repeat(64)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("secret_not_configured"));
+    }
 }
