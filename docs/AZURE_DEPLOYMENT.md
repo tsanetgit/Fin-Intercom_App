@@ -1,6 +1,6 @@
 # Azure deployment — architecture and how it works
 
-How the connector's Azure environment works: the system shape, what happens on each
+How the adapter's Azure environment works: the system shape, what happens on each
 request in both directions, the storage design, and what separates this test
 environment from a production deployment. The runbook is [AZURE_POC.md](AZURE_POC.md);
 the exact container spec is `deploy/containerapp.yaml.tmpl`. Everything here is
@@ -98,7 +98,7 @@ doing its job.
 sequenceDiagram
     participant A as Agent (Help Desk)
     participant I as Intercom
-    participant G as Connector (Azure)
+    participant G as Adapter (Azure)
     participant T as TSANet BETA
 
     A->>I: click Submit in the panel
@@ -123,7 +123,7 @@ claim-before-create so duplicate deliveries cannot double-ticket (D14).
 sequenceDiagram
     participant P as Partner (via TSANet)
     participant T as TSANet BETA
-    participant G as Connector (Azure)
+    participant G as Adapter (Azure)
     participant I as Intercom workspace
 
     P->>T: creates collaboration case

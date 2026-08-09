@@ -1,8 +1,8 @@
 # Azure test environment — runbook
 
-The Azure deployment is the connector's default environment for PoC, testing and
+The Azure deployment is the adapter's default environment for PoC, testing and
 demos, with **full inbound and outbound capability**. It is not production: its
-purpose is to demonstrate the connector to the technology committee so a production
+purpose is to demonstrate the adapter to the technology committee so a production
 deployment gets decided, and its storage/subscription posture reflects that (see
 "Not production" below). Architecture and diagrams: [AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md).
 The deploy script is `scripts/azure-poc-deploy.sh`; the exact container spec it
@@ -41,7 +41,7 @@ Parameters override via env: `AZ_RG`, `AZ_LOCATION`, `AZ_ACR`, `AZ_APP`,
 
 ## 3. Intercom app configuration
 
-The connector serves one private Intercom app in the dev workspace. In the
+The adapter serves one private Intercom app in the dev workspace. In the
 Developer Hub, its URLs point at the app's FQDN (printed by the deploy script):
 
 - Canvas initialize: `https://<fqdn>/canvas/initialize`
@@ -68,9 +68,9 @@ annotations. If the app's credentials rotate, update `.env` and re-run the deplo
   within one poller cycle (5 min) if push missed. The ticket's panel offers
   Accept / Request information / Decline with an editable engineer identity.
 
-## Precondition: one live connector per member
+## Precondition: one live adapter per member
 
-This must be the **only** connector instance running against the sdk1 member.
+This must be the **only** adapter instance running against the sdk1 member.
 A second instance with its own link table (any other deployment of this repo
 pointed at the same credentials) races the poller and double-creates tickets for
 inbound cases — D14's unique-token claim protects each instance against its own
