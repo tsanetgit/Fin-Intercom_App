@@ -1,6 +1,6 @@
 # Container App spec template for the Azure test environment. Rendered by
-# scripts/azure-poc-deploy.sh via python string.Template ($VAR placeholders) into a
-# short-lived temp file (it carries secret values once rendered), then applied with
+# scripts/azure-poc-deploy.sh via python string.Template (dollar-sign placeholders)
+# into a short-lived temp file (it carries secret values once rendered), then applied with
 # `az containerapp create --yaml` — an ARM upsert, so the same render both creates
 # and updates.
 #
@@ -15,6 +15,12 @@
 #   - min = max = 1: the poller cursor and the SQLite store are single-writer by
 #     design, and an always-warm replica is what keeps canvas responses inside
 #     Intercom's patience.
+# Top-level resource fields: create --yaml requires them (update tolerates their
+# absence, which is how the properties-only first draft slipped through against a
+# live app).
+location: $LOCATION
+name: $APP_NAME
+type: Microsoft.App/containerApps
 properties:
   environmentId: $ENVIRONMENT_ID
   configuration:

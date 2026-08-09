@@ -149,6 +149,7 @@ ACR_PASSWORD="$(az acr credential show -n "$ACR" --query "passwords[0].value" -o
 SPEC="$(mktemp)"; chmod 600 "$SPEC"
 trap 'rm -f "$SPEC"' EXIT
 ENVIRONMENT_ID="$ENVIRONMENT_ID" \
+LOCATION="$LOC" APP_NAME="$APP" \
 IMAGE="$ACR.azurecr.io/$IMAGE_TAG" \
 ACR_SERVER="$ACR.azurecr.io" ACR_USER="$ACR" ACR_PASSWORD="$ACR_PASSWORD" \
 TSANET_API_URL="$TSANET_SDK1_API_URL" TSANET_API_USER="$TSANET_SDK1_API_USER" \
@@ -162,7 +163,18 @@ python3 - "$REPO/deploy/containerapp.yaml.tmpl" > "$SPEC" <<'EOF'
 import os, string, sys
 sys.stdout.write(string.Template(open(sys.argv[1]).read()).substitute(os.environ))
 EOF
-az containerapp create -g "$RG" -n "$APP" --environment "$ACA_ENV" --yaml "$SPEC" -o none
+# create --yaml chokes on this spec ("System.Boolean at Path $" — a CLI
+# serialization quirk, reproduced with both properties-only and full-resource
+# shapes), while update --yaml applies the identical file cleanly. So: bootstrap a
+# minimal app only when absent, then ALWAYS apply the full spec via update.
+if ! az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
+  echo "   app absent — bootstrapping minimal shape first"
+  az containerapp create -g "$RG" -n "$APP" --environment "$ACA_ENV" \
+    --image "$ACR.azurecr.io/$IMAGE_TAG" --registry-server "$ACR.azurecr.io" \
+    --ingress external --target-port 8792 --min-replicas 1 --max-replicas 1 \
+    --cpu 0.5 --memory 1Gi -o none
+fi
+az containerapp update -g "$RG" -n "$APP" --yaml "$SPEC" -o none
 
 FQDN="$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
 echo
