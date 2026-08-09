@@ -93,9 +93,19 @@ public class CredentialValidators {
                 String app = me.path("app").path("name").asText("");
                 String idCode = me.path("app").path("id_code").asText("");
                 String admin = me.path("email").asText(me.path("name").asText(""));
-                String identity = (app.isBlank() ? admin : app + (idCode.isBlank() ? "" : " (app " + idCode + ")")
-                        + (admin.isBlank() ? "" : ", admin " + admin));
-                return new Verdict(true, target, ms, identity, null);
+                StringBuilder identity = new StringBuilder();
+                if (!app.isBlank()) {
+                    identity.append(app);
+                    if (!idCode.isBlank()) {
+                        identity.append(" (app ").append(idCode).append(')');
+                    }
+                    if (!admin.isBlank()) {
+                        identity.append(", admin ").append(admin);
+                    }
+                } else {
+                    identity.append(admin);
+                }
+                return new Verdict(true, target, ms, identity.toString(), null);
             }
             return new Verdict(false, target, ms, null, "platform answered HTTP " + r.statusCode());
         } catch (Exception e) {

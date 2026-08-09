@@ -45,6 +45,7 @@ class CredentialValidationTest {
 
     private static final String ADMIN_SECRET = "validate-test-secret";
     private static final String GOOD_INTERCOM_TOKEN = "good-intercom-token-9x8y7z";
+    private static final String GOOD_TOKEN_NO_APP = "good-token-without-app-object";
     private static final String STAGED_MARKER = "staged-value-canary-51f9e2";
 
     private static final HttpServer STUB;
@@ -55,9 +56,13 @@ class CredentialValidationTest {
             STUB.createContext("/me", exchange -> {
                 String auth = exchange.getRequestHeaders().getFirst("Authorization");
                 boolean ok = ("Bearer " + GOOD_INTERCOM_TOKEN).equals(auth);
+                boolean appless = ("Bearer " + GOOD_TOKEN_NO_APP).equals(auth);
                 byte[] body = (ok
                         ? "{\"type\":\"admin\",\"email\":\"stub-admin@example.test\",\"app\":{\"name\":\"Stub Workspace\",\"id_code\":\"stub123\"}}"
+                        : appless
+                        ? "{\"type\":\"admin\",\"email\":\"lonely-admin@example.test\"}"
                         : "{\"errors\":[{\"code\":\"unauthorized\"}]}").getBytes(StandardCharsets.UTF_8);
+                ok = ok || appless;
                 exchange.getResponseHeaders().set("content-type", "application/json");
                 exchange.sendResponseHeaders(ok ? 200 : 401, body.length);
                 try (OutputStream out = exchange.getResponseBody()) {
@@ -139,6 +144,17 @@ class CredentialValidationTest {
                         org.hamcrest.Matchers.containsString("Stub Workspace")))
                 .andExpect(jsonPath("$.note").value(
                         org.hamcrest.Matchers.containsString("this verdict changed nothing")));
+    }
+
+    @Test
+    void anApplessMeResponseFallsBackToTheAdminIdentity() throws Exception {
+        // The previously untested branch: a /me without an app object must identify
+        // by the admin alone, not render blank or misattach the app suffixes.
+        mvc.perform(signedPost("/admin/credentials/intercom-access-token/validate",
+                        "{\"accessToken\":\"" + GOOD_TOKEN_NO_APP + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(true))
+                .andExpect(jsonPath("$.probe.identity").value("lonely-admin@example.test"));
     }
 
     @Test
