@@ -1,0 +1,207 @@
+# Azure deployment — architecture and how it works
+
+How the connector's Azure environment works: the system shape, what happens on each
+request in both directions, the storage design, and what separates this test
+environment from a production deployment. The runbook is [AZURE_POC.md](AZURE_POC.md);
+the exact container spec is `deploy/containerapp.yaml.tmpl`. Everything here is
+live-verified (2026-08-08): full outbound submissions from the Inbox, and a full
+inbound round trip — partner case → signed CloudEvent → ticket — including an
+unplanned real-failure recovery by the reconciliation poller, receipts below.
+
+## System overview
+
+```mermaid
+flowchart LR
+    subgraph Intercom["Intercom workspace"]
+        AGENT["Agent in Help Desk<br/>(ticket Details panel)"]
+        APP["Private app: tsanet-connect<br/>canvas + webhook URLs"]
+        AGENT --> APP
+    end
+
+    subgraph Azure["Azure (rg tsanet-fin-poc, westus2)"]
+        INGRESS["ACA ingress<br/>managed TLS<br/>*.azurecontainerapps.io"]
+        subgraph REPLICA["replica (min = max = 1, always warm)"]
+            GW["fin-gateway-poc<br/>Spring Boot, prod profile<br/>poller ENABLED"]
+            BK["links-backup sidecar<br/>copies db pair every 5 min"]
+            VOL["/shared (EmptyDir)<br/>links.db + connect-sdk.db"]
+            GW --- VOL
+            BK --- VOL
+        end
+        FILES["/data (Azure Files share)<br/>restore source + backup target"]
+        ACR["ACR tsanetfinpoc"]
+        INGRESS --> GW
+        GW -. "restore on boot" .-> FILES
+        BK -. "backup loop" .-> FILES
+        ACR -. "image pull" .-> REPLICA
+    end
+
+    TSANET["TSANet Connect BETA<br/>(as member sdk1)"]
+    IAPI["Intercom REST API"]
+
+    APP -- "signed canvas + webhooks" --> INGRESS
+    TSANET -- "v2 CloudEvents<br/>(subscription, HMAC-signed)" --> INGRESS
+    GW -- "submit / respond / fetch / list" --> TSANET
+    GW -- "tickets, annotations, contacts" --> IAPI
+```
+
+Key properties:
+
+- **Full capability, both directions**: outbound canvas submissions, inbound
+  guard-create from TSANet push, the reconciliation poller as the safety net, and
+  the response panel (Accept / Request information / Decline) on inbound tickets.
+- **Prod profile stays armed** — fake gateways refuse to start, the in-memory link
+  store is refused, relative store paths are refused. Only configuration
+  distinguishes this environment from a production one.
+- **TLS and the hostname are Azure's** — managed ingress certificates on a
+  generated `*.azurecontainerapps.io` name; nothing certificate-shaped is managed
+  by hand.
+- **Always warm** (min = max = 1): the poller actually runs, and canvas responses
+  stay inside Intercom's patience with no cold starts.
+
+## Storage: why a sidecar and not a mounted database
+
+Probed live: **SQLite in WAL mode cannot run on an Azure Files SMB mount.** WAL
+requires shared-memory mapping the network filesystem cannot provide; the symptom
+is `SQLITE_BUSY` at the very first connection, and a clean retry reproduces it. So
+the database lives where WAL works and the share holds copies:
+
+```mermaid
+flowchart LR
+    subgraph REPLICA["replica"]
+        APPC["app container"]
+        SIDE["links-backup sidecar"]
+        SH["/shared (EmptyDir, local)<br/>links.db (WAL) + connect-sdk.db"]
+        APPC -- "reads/writes (SQLite WAL)" --> SH
+        SIDE -- "every 5 min: cp db + wal" --> AF
+        AF -- "on boot: restore latest" --> SH
+    end
+    AF["/data (Azure Files)"]
+```
+
+- The app container's command restores the latest backup before starting the jar,
+  so a replica restart resumes with at most one backup interval (5 minutes) of
+  link writes lost.
+- The poller cursor lives in the same database file, so it rides the same
+  backup/restore path.
+- This is a **recovery point, not a database**: production replaces the whole
+  arrangement with a managed database, which the storage layer was explicitly
+  designed to make a DataSource change rather than a rewrite.
+
+## Outbound: a canvas click
+
+Every canvas interaction is a signed POST. The signature filter is default-deny
+(decisions.md D1): `/healthz` is the only unauthenticated route, and internet scans
+against the public hostname show up in the logs as rejected `/` probes — the filter
+doing its job.
+
+```mermaid
+sequenceDiagram
+    participant A as Agent (Help Desk)
+    participant I as Intercom
+    participant G as Connector (Azure)
+    participant T as TSANet BETA
+
+    A->>I: click Submit in the panel
+    I->>G: POST /canvas/submit<br/>X-Body-Signature (HMAC-SHA256)
+    G->>G: verify signature, validate,<br/>resolve submitter identity (typed wins, D19)
+    G->>T: create collaboration request (as sdk1)
+    T-->>G: token, respond-by
+    G-->>I: confirmation canvas
+    I-->>A: "Case submitted" card
+    Note over G: async event drain
+    G->>I: REST: ticket attributes + note
+    G->>G: D3 read-back verifies the write landed
+```
+
+## Inbound: a partner case becomes a ticket
+
+The push path is primary; the reconciliation poller re-drives anything push
+missed. Both entry points refuse terminal cases (#28), and creation is
+claim-before-create so duplicate deliveries cannot double-ticket (D14).
+
+```mermaid
+sequenceDiagram
+    participant P as Partner (via TSANet)
+    participant T as TSANet BETA
+    participant G as Connector (Azure)
+    participant I as Intercom workspace
+
+    P->>T: creates collaboration case
+    T->>G: POST /webhooks/tsanet<br/>CloudEvent, X-Hub-Signature-256
+    G->>G: verify signature, dedupe, queue
+    G->>T: fetch case by token
+    G->>G: claim token (UNIQUE constraint arbitrates)
+    G->>I: create [TEST]-titled ticket<br/>(type, attributes, synthetic contact)
+    G->>G: record link + searchable ticket number
+    Note over G,T: if any step fails: claim released,<br/>poller re-drives next cycle (D16)
+    I-->>P: agent responds via the panel<br/>(Accept / Request info / Decline)
+```
+
+**Live receipt for the failure path** (2026-08-08, unplanned): the first real
+inbound delivery failed ticket creation on an environment defect (an HTTP 409
+contact conflict). The claim released as designed, the next poller cycle held the
+cursor (`reconcile_cycle_dirty`), the defect was fixed, and the following cycle
+recovered the case (`reconcile_recovered`) and minted the ticket — a clean cycle
+after. The self-healing design worked on its first real failure, unstaged.
+
+## Deployment pipeline
+
+```mermaid
+flowchart LR
+    SRC["repo @ main"] --> MVN["mvn -Psdk package<br/>connect-gateway exec jar"]
+    MVN --> DB["docker build<br/>--platform linux/amd64<br/>+ jar-content assertion"]
+    DB --> PUSH["az acr login + docker push<br/>(ACR Tasks blocked on free subs)"]
+    PUSH --> WH["TSANet v2 webhook<br/>list-then-create<br/>(secret minted at creation)"]
+    WH --> TMPL["render deploy/containerapp.yaml.tmpl<br/>(secrets injected, temp file)"]
+    TMPL --> CA["az containerapp create --yaml<br/>(ARM upsert)"]
+    CA --> OK["healthz check"]
+```
+
+One script does all of it, idempotently (`scripts/azure-poc-deploy.sh`); the same
+command is first deploy and update. The TSANet v2 subscription secret exists only
+in the creation response, so the script captures it there and carries it into the
+app spec.
+
+## Configuration
+
+All configuration reaches the container as environment variables; secrets ride ACA
+secretrefs. Names are the `application.yml` placeholders verbatim (runtime-proven:
+signature verification works in both schemes).
+
+| Env var | Purpose |
+|---|---|
+| `CONNECTOR_TSANET_MODE=sdk` / `CONNECTOR_INTERCOM_MODE=rest` | real gateways (relaxed binding; the container's entrypoint takes no CLI args) |
+| `TSANET_API_URL` / `TSANET_API_USER` / `TSANET_API_PASSWORD` | BETA endpoint + member credential (sdk1) |
+| `INTERCOM_ACCESS_TOKEN` | Intercom REST; admin id resolved via `GET /me` at boot |
+| `INTERCOM_DEV_CLIENT_SECRET` | canvas + Intercom-webhook signature key |
+| `TSANET_WEBHOOK_SECRET` | TSANet CloudEvents signature key (minted by the v2 API at subscription creation) |
+| `INTERCOM_COLLABORATION_TICKET_TYPE_ID` / `INTERCOM_RESOLVED_STATE_ID` | per-workspace ids (state ids only enumerable under `Intercom-Version: Unstable`, D17) |
+| `CONNECTOR_LINKS_STORE=sqlite` + `CONNECTOR_LINKS_SQLITE_PATH=/shared/links.db` | durable-in-replica store; absolute path satisfies the prod guard |
+| `TSANET_SDK_SQLITE_PATH=/shared/connect-sdk.db` | SDK session store, same volume |
+| `CONNECTOR_RECONCILE_ENABLED=true` | the poller is on — this environment owns inbound |
+| `SPRING_PROFILES_ACTIVE=prod` | baked into the image; all safety guards armed |
+
+## Test environment vs production
+
+| Concern | This environment | Production |
+|---|---|---|
+| Purpose | committee demo / testing | member-facing service |
+| Link storage | SQLite + 5-minute backup loop (RPO ≈ 5 min) | managed database (a DataSource change by design) |
+| Subscription | personal free account | TSANet-controlled subscription |
+| Registry auth | ACR admin user | managed identity + AcrPull |
+| Secrets | injected by the deploy script from `.env` | key vault references |
+| Replicas | 1 (single-writer store + poller cursor) | availability design follows the storage answer |
+| Intercom app | private app, dev workspace | pilot: private app on the member workspace; GA: public listing |
+
+## Teardown
+
+```bash
+az group delete -n tsanet-fin-poc --yes --no-wait
+```
+
+Plus the TSANet v2 webhook subscription (as sdk1) so BETA stops delivering.
+
+## Pointers
+
+- Runbook: [AZURE_POC.md](AZURE_POC.md) · spec: `deploy/containerapp.yaml.tmpl` · script: `scripts/azure-poc-deploy.sh`
+- Decisions: D1 (signature schemes) · D2 (latency budget) · D3 (verify effects) · D12 (durable links) · D14 (claim-before-create) · D16 (reconciliation) · D17 (per-workspace state ids) · D19 (submitter identity)

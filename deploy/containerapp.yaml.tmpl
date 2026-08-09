@@ -1,0 +1,119 @@
+# Container App spec template for the Azure test environment. Rendered by
+# scripts/azure-poc-deploy.sh via python string.Template ($VAR placeholders) into a
+# short-lived temp file (it carries secret values once rendered), then applied with
+# `az containerapp create --yaml` — an ARM upsert, so the same render both creates
+# and updates.
+#
+# The shape this encodes, and why (docs/AZURE_DEPLOYMENT.md has the diagrams):
+#   - TWO containers per replica. The app runs SQLite on /shared (an in-replica
+#     EmptyDir volume): WAL mode cannot live on Azure Files SMB — it needs
+#     shared-memory mapping, and the symptom is SQLITE_BUSY at the very first
+#     connection (hit live 2026-08-08). The links-backup sidecar (same image, shell
+#     loop) copies the database pair to /data (Azure Files) every 5 minutes.
+#   - The app container's command restores the latest backup from /data before exec'ing
+#     the jar, so a replica restart loses at most one backup interval of links.
+#   - min = max = 1: the poller cursor and the SQLite store are single-writer by
+#     design, and an always-warm replica is what keeps canvas responses inside
+#     Intercom's patience.
+properties:
+  environmentId: $ENVIRONMENT_ID
+  configuration:
+    activeRevisionsMode: Single
+    ingress:
+      external: true
+      targetPort: 8792
+      transport: Auto
+    registries:
+      - server: $ACR_SERVER
+        username: $ACR_USER
+        passwordSecretRef: acr-password
+    secrets:
+      - name: acr-password
+        value: $ACR_PASSWORD
+      - name: tsanet-password
+        value: $TSANET_PASSWORD
+      - name: intercom-token
+        value: $INTERCOM_TOKEN
+      - name: intercom-secret
+        value: $INTERCOM_SECRET
+      - name: tsanet-webhook-secret
+        value: $TSANET_WEBHOOK_SECRET_VALUE
+  template:
+    scale:
+      minReplicas: 1
+      maxReplicas: 1
+    volumes:
+      - name: findata
+        storageName: findata
+        storageType: AzureFile
+      - name: shared
+        storageType: EmptyDir
+    containers:
+      - name: fin-gateway-poc
+        image: $IMAGE
+        command:
+          - /bin/sh
+          - -c
+          - >-
+            cp -f /data/links.db /shared/links.db 2>/dev/null || true;
+            cp -f /data/links.db-wal /shared/links.db-wal 2>/dev/null || true;
+            cp -f /data/connect-sdk.db /shared/connect-sdk.db 2>/dev/null || true;
+            exec java -jar /app.jar
+        resources:
+          cpu: 0.5
+          memory: 1Gi
+        volumeMounts:
+          - volumeName: findata
+            mountPath: /data
+          - volumeName: shared
+            mountPath: /shared
+        env:
+          - name: CONNECTOR_TSANET_MODE
+            value: sdk
+          - name: CONNECTOR_INTERCOM_MODE
+            value: rest
+          - name: TSANET_API_URL
+            value: $TSANET_API_URL
+          - name: TSANET_API_USER
+            value: $TSANET_API_USER
+          - name: TSANET_API_PASSWORD
+            secretRef: tsanet-password
+          - name: INTERCOM_ACCESS_TOKEN
+            secretRef: intercom-token
+          - name: INTERCOM_DEV_CLIENT_SECRET
+            secretRef: intercom-secret
+          - name: TSANET_WEBHOOK_SECRET
+            secretRef: tsanet-webhook-secret
+          - name: INTERCOM_COLLABORATION_TICKET_TYPE_ID
+            value: "$TICKET_TYPE_ID"
+          - name: INTERCOM_RESOLVED_STATE_ID
+            value: "$RESOLVED_STATE_ID"
+          - name: CONNECTOR_LINKS_STORE
+            value: sqlite
+          - name: CONNECTOR_LINKS_SQLITE_PATH
+            value: /shared/links.db
+          - name: TSANET_SDK_SQLITE_PATH
+            value: /shared/connect-sdk.db
+          - name: CONNECTOR_RECONCILE_ENABLED
+            value: "true"
+      - name: links-backup
+        image: $IMAGE
+        command:
+          - /bin/sh
+          - -c
+          - >-
+            while true; do sleep 300;
+            cp -f /shared/links.db /data/links.db.new 2>/dev/null &&
+            cp -f /shared/links.db-wal /data/links.db-wal.new 2>/dev/null;
+            mv -f /data/links.db-wal.new /data/links.db-wal 2>/dev/null;
+            mv -f /data/links.db.new /data/links.db 2>/dev/null;
+            cp -f /shared/connect-sdk.db /data/connect-sdk.db 2>/dev/null;
+            done
+        resources:
+          cpu: 0.25
+          memory: 0.5Gi
+        volumeMounts:
+          - volumeName: findata
+            mountPath: /data
+          - volumeName: shared
+            mountPath: /shared
