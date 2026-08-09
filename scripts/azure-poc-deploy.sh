@@ -142,6 +142,23 @@ if [ -z "$WEBHOOK_SECRET" ]; then
     --query "[?name=='tsanet-webhook-secret'].value | [0]" -o tsv 2>/dev/null || true)"
 fi
 
+# ---- admin plane secret: keep-existing-else-mint ------------------------------
+# Same discipline as the webhook secret: the spec below is a FULL update, so any
+# secret not re-rendered into it is wiped. Keep the app's current value across
+# runs; mint one only when the app has none (first admin-enabled deploy). The
+# admin plane fails closed without it, so this line is what turns the plane on.
+ADMIN_API_SECRET="${CONNECTOR_ADMIN_API_SECRET_OVERRIDE:-}"
+if [ -z "$ADMIN_API_SECRET" ]; then
+  ADMIN_API_SECRET="$(az containerapp secret list -g "$RG" -n "$APP" --show-values \
+    --query "[?name=='admin-api-secret'].value | [0]" -o tsv 2>/dev/null || true)"
+fi
+if [ -z "$ADMIN_API_SECRET" ]; then
+  command -v openssl >/dev/null || die "openssl not found (needed to mint the admin secret)"
+  ADMIN_API_SECRET="$(openssl rand -hex 32)"
+  echo "   minted new admin API secret (never printed; retrieve with:"
+  echo "   az containerapp secret list -g $RG -n $APP --show-values --query \"[?name=='admin-api-secret'].value | [0]\" -o tsv)"
+fi
+
 # ---- render the app spec and apply ------------------------------------------
 echo "== rendering app spec and applying (ARM upsert)"
 ENVIRONMENT_ID="$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)"
@@ -157,6 +174,8 @@ TSANET_PASSWORD="$TSANET_SDK1_API_PASSWORD" \
 INTERCOM_TOKEN="$INTERCOM_DEV_ACCESS_TOKEN" \
 INTERCOM_SECRET="$INTERCOM_DEV_CLIENT_SECRET" \
 TSANET_WEBHOOK_SECRET_VALUE="${WEBHOOK_SECRET:-unset}" \
+ADMIN_API_SECRET_VALUE="$ADMIN_API_SECRET" \
+PUBLIC_BASE_URL="${FQDN:+https://$FQDN}" \
 TICKET_TYPE_ID="${INTERCOM_COLLABORATION_TICKET_TYPE_ID:-4561712}" \
 RESOLVED_STATE_ID="${INTERCOM_RESOLVED_STATE_ID:-9619799}" \
 python3 - "$REPO/deploy/containerapp.yaml.tmpl" > "$SPEC" <<'EOF'

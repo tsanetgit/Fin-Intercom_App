@@ -44,6 +44,8 @@ properties:
         value: $INTERCOM_SECRET
       - name: tsanet-webhook-secret
         value: $TSANET_WEBHOOK_SECRET_VALUE
+      - name: admin-api-secret
+        value: $ADMIN_API_SECRET_VALUE
   template:
     scale:
       minReplicas: 1
@@ -102,6 +104,10 @@ properties:
             value: /shared/connect-sdk.db
           - name: CONNECTOR_RECONCILE_ENABLED
             value: "true"
+          - name: CONNECTOR_ADMIN_API_SECRET
+            secretRef: admin-api-secret
+          - name: CONNECTOR_PUBLIC_BASE_URL
+            value: "$PUBLIC_BASE_URL"
       - name: links-backup
         image: $IMAGE
         command:
