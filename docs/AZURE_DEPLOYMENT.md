@@ -180,6 +180,8 @@ signature verification works in both schemes).
 | `TSANET_SDK_SQLITE_PATH=/shared/connect-sdk.db` | SDK session store, same volume |
 | `CONNECTOR_RECONCILE_ENABLED=true` | the poller is on — this environment owns inbound |
 | `SPRING_PROFILES_ACTIVE=prod` | baked into the image; all safety guards armed |
+| `CONNECTOR_ADMIN_API_SECRET` | admin-plane signature key (Connect_Gateway admin contract v1, D20); unset = every `/admin/*` request 401s, the plane is simply off |
+| `CONNECTOR_PUBLIC_BASE_URL` | external base for `/admin/urls`; unset falls back to the request's forwarded/Host headers |
 
 ## Test environment vs production
 
