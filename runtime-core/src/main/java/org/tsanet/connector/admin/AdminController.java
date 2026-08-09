@@ -69,11 +69,12 @@ public class AdminController {
     private final ReconciliationPoller poller;
     private final EventQueue queue;
     private final RingBufferLogAppender ring;
+    private final CredentialValidators validators;
     private final Instant startedAt = Instant.now();
 
     public AdminController(ConnectorProperties properties, InboundProperties inbound, Environment env,
             SubmissionLinkTable links, PollerStateStore pollerState, ReconciliationPoller poller,
-            EventQueue queue, RingBufferLogAppender ring) {
+            EventQueue queue, RingBufferLogAppender ring, CredentialValidators validators) {
         this.properties = properties;
         this.inbound = inbound;
         this.env = env;
@@ -82,18 +83,23 @@ public class AdminController {
         this.poller = poller;
         this.queue = queue;
         this.ring = ring;
+        this.validators = validators;
     }
 
     @GetMapping("/admin/info")
     public Map<String, Object> info() {
         String version = getClass().getPackage().getImplementationVersion();
-        return Map.of(
-                // Same identity /healthz reports; keep the two literals in step.
-                "service", "tsanet-intercom-connector",
-                "version", version == null || version.isBlank() ? "dev" : version,
-                "platform", "intercom",
-                "deploymentShape", "tsanet-hosted",
-                "adminContractVersion", ADMIN_CONTRACT_VERSION);
+        Map<String, Object> out = new LinkedHashMap<>();
+        // Same identity /healthz reports; keep the two literals in step.
+        out.put("service", "tsanet-intercom-connector");
+        out.put("version", version == null || version.isBlank() ? "dev" : version);
+        out.put("platform", "intercom");
+        out.put("deploymentShape", "tsanet-hosted");
+        out.put("adminContractVersion", ADMIN_CONTRACT_VERSION);
+        out.put("features", List.of("credential-validate"));
+        out.put("validatableCredentials", validators.declared().stream()
+                .map(d -> Map.of("name", d.name(), "fields", d.fields())).toList());
+        return out;
     }
 
     @GetMapping("/admin/status")
