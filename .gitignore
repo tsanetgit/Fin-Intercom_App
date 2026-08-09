@@ -8,3 +8,9 @@ application-local*.yml
 .idea/
 *.iml
 .vscode/
+
+# SQLite sidecar files (WAL/shm) and local backfill snapshots - runtime state,
+# never commit material. The bare *.db pattern above does not cover them.
+*.db-shm
+*.db-wal
+*.db.pre-backfill
