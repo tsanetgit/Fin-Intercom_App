@@ -104,7 +104,8 @@ properties:
           - >-
             while true; do sleep 300;
             cp -f /shared/links.db /data/links.db.new 2>/dev/null &&
-            cp -f /shared/links.db-wal /data/links.db-wal 2>/dev/null;
+            cp -f /shared/links.db-wal /data/links.db-wal.new 2>/dev/null;
+            mv -f /data/links.db-wal.new /data/links.db-wal 2>/dev/null;
             mv -f /data/links.db.new /data/links.db 2>/dev/null;
             cp -f /shared/connect-sdk.db /data/connect-sdk.db 2>/dev/null;
             done
