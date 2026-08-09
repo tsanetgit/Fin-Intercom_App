@@ -76,6 +76,17 @@ az acr login -n "$ACR"
 docker build --platform linux/amd64 -t "$ACR.azurecr.io/$IMAGE_TAG" .
 docker push "$ACR.azurecr.io/$IMAGE_TAG"
 
+# Pin the spec to the pushed DIGEST, not the tag. ACA rolls a revision only when the
+# template changes and never re-resolves a same-tag reference, so a tag-referenced
+# spec turns "pushed new code, config unchanged" into a silent no-op deploy (observed
+# live 2026-08-09: a rerun pushed digest 40a01e7c while the app kept running the
+# previous digest, invisibly). Resolved from ACR, not docker inspect, so the value is
+# what the registry will actually serve.
+IMAGE_DIGEST="$(az acr repository show -n "$ACR" --image "$IMAGE_TAG" --query digest -o tsv)"
+[ -n "$IMAGE_DIGEST" ] || die "could not resolve the pushed digest for $IMAGE_TAG from ACR"
+IMAGE_REF="$ACR.azurecr.io/${IMAGE_TAG%%:*}@$IMAGE_DIGEST"
+echo "   image pinned: $IMAGE_REF"
+
 echo "== container apps environment $ACA_ENV"
 az containerapp env create -g "$RG" -n "$ACA_ENV" -l "$LOC" -o none
 
@@ -167,7 +178,7 @@ SPEC="$(mktemp)"; chmod 600 "$SPEC"
 trap 'rm -f "$SPEC"' EXIT
 ENVIRONMENT_ID="$ENVIRONMENT_ID" \
 LOCATION="$LOC" APP_NAME="$APP" \
-IMAGE="$ACR.azurecr.io/$IMAGE_TAG" \
+IMAGE="$IMAGE_REF" \
 ACR_SERVER="$ACR.azurecr.io" ACR_USER="$ACR" ACR_PASSWORD="$ACR_PASSWORD" \
 TSANET_API_URL="$TSANET_SDK1_API_URL" TSANET_API_USER="$TSANET_SDK1_API_USER" \
 TSANET_PASSWORD="$TSANET_SDK1_API_PASSWORD" \
@@ -189,7 +200,7 @@ EOF
 if ! az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
   echo "   app absent — bootstrapping minimal shape first"
   az containerapp create -g "$RG" -n "$APP" --environment "$ACA_ENV" \
-    --image "$ACR.azurecr.io/$IMAGE_TAG" --registry-server "$ACR.azurecr.io" \
+    --image "$IMAGE_REF" --registry-server "$ACR.azurecr.io" \
     --ingress external --target-port 8792 --min-replicas 1 --max-replicas 1 \
     --cpu 0.5 --memory 1Gi -o none
 fi
