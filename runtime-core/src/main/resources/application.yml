@@ -68,6 +68,13 @@ connector:
   # Empty secrets fail closed (401) on the signed endpoints; /healthz stays open.
   intercom-client-secret: ${INTERCOM_DEV_CLIENT_SECRET:}
   tsanet-webhook-secret: ${TSANET_WEBHOOK_SECRET:${TSANET_BETA_WEBHOOK_SECRET:}}
+  # Admin plane (Connect_Gateway docs/admin-contract.md v1; docs/decisions.md D20).
+  # Blank admin secret = every /admin/* request answers 401 (fail closed): an instance
+  # with no admin secret serves no admin plane. This is the console<->adapter secret,
+  # never a member credential. public-base-url feeds /admin/urls; unset falls back to
+  # the request's X-Forwarded-Proto/Host, then Host.
+  admin-api-secret: ${CONNECTOR_ADMIN_API_SECRET:}
+  public-base-url: ${CONNECTOR_PUBLIC_BASE_URL:}
   max-body-bytes: 1048576
   dedupe-capacity: 10000
   queue-capacity: 10000

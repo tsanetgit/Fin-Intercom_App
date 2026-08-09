@@ -12,7 +12,9 @@ public record ConnectorProperties(
         String tsanetWebhookSecret,
         int maxBodyBytes,
         int dedupeCapacity,
-        int queueCapacity) {
+        int queueCapacity,
+        String adminApiSecret,
+        String publicBaseUrl) {
 
     public ConnectorProperties {
         if (maxBodyBytes <= 0) {

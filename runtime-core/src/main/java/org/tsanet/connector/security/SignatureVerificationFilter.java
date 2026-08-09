@@ -15,10 +15,11 @@ import org.tsanet.connector.config.ConnectorProperties;
 
 /**
  * One parameterized verifier for all three inbound signature schemes
- * (docs/decisions.md D1). Default-deny: /healthz is the only open route, requests
- * matching a scheme are verified, and anything else is rejected 401, so an encoded or
- * parameterized path that dodges the prefix match gets rejected rather than passed
- * through. Matching uses a decoded, semicolon-stripped path so the 401-vs-verify split
+ * (docs/decisions.md D1), plus the admin scheme's canonical-string verification
+ * ({@link AdminSignatures}, docs/decisions.md D20). Default-deny: /healthz is the only
+ * open route, requests matching a scheme are verified, and anything else is rejected
+ * 401, so an encoded or parameterized path that dodges the prefix match gets rejected
+ * rather than passed through. Matching uses a decoded, semicolon-stripped path so the 401-vs-verify split
  * mirrors what the container routes. Missing or unconfigured secrets fail closed.
  */
 @Component
@@ -60,6 +61,31 @@ public class SignatureVerificationFilter extends OncePerRequestFilter {
         }
         if (OPEN.contains(path)) {
             chain.doFilter(request, response);
+            return;
+        }
+        // Admin plane (docs/decisions.md D20): matched on the SAME normalized path as
+        // every other rule here, so an encoded or parameterized /admin variant cannot
+        // route differently for auth than for dispatch. The signature itself covers the
+        // request-target as sent (raw URI + query) — the client signs what it sends.
+        if (path.startsWith("/admin/")) {
+            byte[] body = request.getInputStream().readNBytes(properties.maxBodyBytes() + 1);
+            if (body.length > properties.maxBodyBytes()) {
+                reject(response, HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, "body_too_large");
+                return;
+            }
+            String query = request.getQueryString();
+            String requestTarget = query == null ? request.getRequestURI() : request.getRequestURI() + "?" + query;
+            String code = AdminSignatures.verify(
+                    request.getHeader(AdminSignatures.TIMESTAMP_HEADER),
+                    request.getHeader(AdminSignatures.SIGNATURE_HEADER),
+                    request.getMethod(), requestTarget, body,
+                    properties.adminApiSecret(), java.time.Instant.now().getEpochSecond());
+            if (code != null) {
+                log.warn("rejecting {}: admin auth failed ({})", request.getRequestURI(), code);
+                reject(response, HttpServletResponse.SC_UNAUTHORIZED, code);
+                return;
+            }
+            chain.doFilter(new CachedBodyRequest(request, body), response);
             return;
         }
         Scheme scheme = match(path);

@@ -54,7 +54,7 @@ class AnnotationHandlerTest {
                 return Stream.empty();
             }
         };
-        return new EventQueue(new ConnectorProperties(null, null, 0, 0, 0), none);
+        return new EventQueue(new ConnectorProperties(null, null, 0, 0, 0, null, null), none);
     }
 
     private static InboundEvent event(String token, int attempt) {

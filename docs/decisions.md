@@ -867,3 +867,41 @@ audits who drove the submission; the draft carries who TSANet shows to the partn
 On `retry_submit`, or a status check that lands the case, that is the teammate whose
 request LANDED it — who can differ from both the original clicker and the drafted
 submitter. That divergence is the audit meaning, not a bug.
+
+## D20. The admin read surface: a fourth scheme, and reporting that never triggers work
+
+The adapter serves the version-1 read surface of the gateway admin contract
+(`Connect_Gateway` `docs/admin-contract.md`): `/admin/info`, `/status`, `/urls`,
+`/config`, `/logs/tail`, `/audit/tail`. This is TSANet-internal support tooling for
+the Admin Console (`Connect_Gateway#9`); it is not member-facing and it is not the
+health probe (`/healthz` stays open and unauthenticated, exactly as before).
+
+**Why a fourth verification scheme instead of a fourth row in `SCHEMES`.** The three
+existing schemes HMAC the raw request body, which is correct for signed platform
+webhooks and canvas posts. Admin reads are GETs with empty bodies, so a body-HMAC
+would be one constant value per secret — a captured header would replay against every
+admin GET forever. `AdminSignatures` verifies an HMAC over a canonical string binding
+timestamp, method, the request-target exactly as sent (raw URI plus query), and the
+body hash, with a 300-second freshness window checked before any HMAC work. Replay of
+the identical read inside that window is accepted and written into the contract; a
+nonce store arrives with the first write endpoint, not before. The filter matches
+`/admin/` on the SAME normalized path as every other rule, so an encoded variant
+cannot route differently for auth than for dispatch, and a blank
+`connector.admin-api-secret` fails closed: an instance with no admin secret serves no
+admin plane.
+
+**Reporting never triggers work.** `/admin/status` reads the poller's public counters
+and the stored cursor; it never runs a cycle (D16 owns when cycles happen), never
+refreshes a session, never touches Intercom or TSANet. The one operational cost the
+admin plane adds is memory: two bounded rings (`RingBufferLogAppender`, 1000 log
+lines / 500 audit events) attached to the root logger so an operator can read the
+recent past without a cloud CLI. The audit ring keys on the `tsanet_audit` message
+prefix — the audit convention is emitted through each class's own logger, so the
+prefix, not a logger name, is the structural marker; anything that renames the
+convention must sweep this too.
+
+**Secrets are presence markers, everywhere.** `/admin/config` serves a curated
+allowlist of non-secret properties plus `{present}` markers for a curated list of
+secrets; nothing enumerates property sources, because the sources contain the whole
+process environment and enumeration is how secrets leak. Log tails may contain case
+fragments; the admin signature is the control, and the contract says so.
