@@ -85,7 +85,7 @@ az group delete -n tsanet-fin-poc --yes --no-wait
 
 Everything lives in that one resource group, including the auto-created Log
 Analytics workspace. If you overrode `AZ_RG`, delete that name instead. Also delete
-the TSANet v2 webhook subscription (as the Connect Gateway member: `DELETE /v2/webhooks/{id}`) so BETA
+the TSANet v2 webhook subscription (as the Connect Gateway member: `DELETE /v1/webhooks/{id}` - the delete lives on v1; the v2 path 404s, probed at the 2026-08-11 cutover) so BETA
 stops attempting deliveries.
 
 ## Not production
