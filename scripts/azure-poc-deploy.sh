@@ -56,7 +56,9 @@ ENV_FILE="${ENV_FILE:-/Users/shawnray/code/tsanet-ops/.env}"
 set +u; set -a; . "$ENV_FILE"; set +a; set -u
 
 need() { [ -n "${!1:-}" ] || die "$1 is empty in $ENV_FILE"; }
-need TSANET_SDK1_API_URL; need TSANET_SDK1_API_USER; need TSANET_SDK1_API_PASSWORD
+need TSANET_SDK1_API_URL   # Connect API base (member-agnostic value); sdk1 naming is historical
+need TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_ID; need TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_SECRET
+need TSANET_BETA_ENTRA_TENANT_ID; need TSANET_BETA_ENTRA_AUDIENCE; need TSANET_BETA_ENTRA_SCOPE
 need INTERCOM_DEV_ACCESS_TOKEN; need INTERCOM_DEV_CLIENT_SECRET
 
 # ---- provision --------------------------------------------------------------
@@ -107,11 +109,17 @@ az containerapp env storage set -g "$RG" -n "$ACA_ENV" --storage-name "$SHARE" \
 # created it. Registration happens BEFORE the app render so a newly minted secret
 # rides this same deploy.
 UA="tsanet-azure-deploy/1.0"
-echo "== TSANet v2 webhook registration (as sdk1, idempotent)"
-TSANET_TOKEN="$(curl -s -A "$UA" -X POST "$TSANET_SDK1_API_URL/v1/login" \
-  -H 'content-type: application/json' \
-  -d "{\"username\":\"$TSANET_SDK1_API_USER\",\"password\":\"$TSANET_SDK1_API_PASSWORD\"}" \
-  | python3 -c "import json,sys; print(json.load(sys.stdin)['accessToken'])")"
+echo "== TSANet v2 webhook registration (as the Connect Gateway member, idempotent)"
+# Entra client-credentials: this member has no password-mode API login, and the
+# subscription must belong to the SAME member the adapter authenticates as, or
+# inbound pushes are signed with a secret the adapter does not hold.
+TSANET_TOKEN="$(curl -s -A "$UA" -X POST \
+  "https://login.microsoftonline.com/$TSANET_BETA_ENTRA_TENANT_ID/oauth2/v2.0/token" \
+  --data-urlencode "grant_type=client_credentials" \
+  --data-urlencode "client_id=$TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_ID" \
+  --data-urlencode "client_secret=$TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_SECRET" \
+  --data-urlencode "scope=$TSANET_BETA_ENTRA_SCOPE" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")"
 # The FQDN only exists after the first app create; on a fresh setup the webhook is
 # registered on the SECOND run, or pass AZ_FQDN explicitly. On an existing setup the
 # app already exists and this resolves.
@@ -180,8 +188,11 @@ ENVIRONMENT_ID="$ENVIRONMENT_ID" \
 LOCATION="$LOC" APP_NAME="$APP" \
 IMAGE="$IMAGE_REF" \
 ACR_SERVER="$ACR.azurecr.io" ACR_USER="$ACR" ACR_PASSWORD="$ACR_PASSWORD" \
-TSANET_API_URL="$TSANET_SDK1_API_URL" TSANET_API_USER="$TSANET_SDK1_API_USER" \
-TSANET_PASSWORD="$TSANET_SDK1_API_PASSWORD" \
+TSANET_API_URL="$TSANET_SDK1_API_URL" TSANET_API_USER="$TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_ID" \
+TSANET_PASSWORD="$TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_SECRET" \
+TSANET_AUTH_MODE="client_credentials" \
+TSANET_ENTRA_TENANT_ID="$TSANET_BETA_ENTRA_TENANT_ID" \
+TSANET_ENTRA_AUDIENCE="$TSANET_BETA_ENTRA_AUDIENCE" \
 INTERCOM_TOKEN="$INTERCOM_DEV_ACCESS_TOKEN" \
 INTERCOM_SECRET="$INTERCOM_DEV_CLIENT_SECRET" \
 TSANET_WEBHOOK_SECRET_VALUE="${WEBHOOK_SECRET:-unset}" \

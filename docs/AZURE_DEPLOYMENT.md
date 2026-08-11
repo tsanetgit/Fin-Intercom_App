@@ -35,7 +35,7 @@ flowchart LR
         ACR -. "image pull" .-> REPLICA
     end
 
-    TSANET["TSANet Connect BETA<br/>(as member sdk1)"]
+    TSANET["TSANet Connect BETA<br/>(as the Connect Gateway member)"]
     IAPI["Intercom REST API"]
 
     APP -- "signed canvas + webhooks" --> INGRESS
@@ -104,7 +104,7 @@ sequenceDiagram
     A->>I: click Submit in the panel
     I->>G: POST /canvas/submit<br/>X-Body-Signature (HMAC-SHA256)
     G->>G: verify signature, validate,<br/>resolve submitter identity (typed wins, D19)
-    G->>T: create collaboration request (as sdk1)
+    G->>T: create collaboration request (as the Connect Gateway member)
     T-->>G: token, respond-by
     G-->>I: confirmation canvas
     I-->>A: "Case submitted" card
@@ -171,7 +171,8 @@ signature verification works in both schemes).
 | Env var | Purpose |
 |---|---|
 | `CONNECTOR_TSANET_MODE=sdk` / `CONNECTOR_INTERCOM_MODE=rest` | real gateways (relaxed binding; the container's entrypoint takes no CLI args) |
-| `TSANET_API_URL` / `TSANET_API_USER` / `TSANET_API_PASSWORD` | BETA endpoint + member credential (sdk1) |
+| `TSANET_API_URL` / `TSANET_API_USER` / `TSANET_API_PASSWORD` | BETA endpoint + member credential: the Connect Gateway member via Entra client-credentials (`TSANET_API_USER` = client id, `TSANET_API_PASSWORD` = client secret) |
+| `TSANET_AUTH_MODE` / `TSANET_ENTRA_TENANT_ID` / `TSANET_ENTRA_AUDIENCE` | `client_credentials` plus the tenant and audience the token is minted against |
 | `INTERCOM_ACCESS_TOKEN` | Intercom REST; admin id resolved via `GET /me` at boot |
 | `INTERCOM_DEV_CLIENT_SECRET` | canvas + Intercom-webhook signature key |
 | `TSANET_WEBHOOK_SECRET` | TSANet CloudEvents signature key (minted by the v2 API at subscription creation) |
@@ -191,7 +192,7 @@ signature verification works in both schemes).
 | Link storage | SQLite + 5-minute backup loop (RPO ≈ 5 min) | managed database (a DataSource change by design) |
 | Subscription | personal free account | TSANet-controlled subscription |
 | Registry auth | ACR admin user | managed identity + AcrPull |
-| Secrets | injected by the deploy script from `.env` | key vault references |
+| Secrets | injected by the deploy script from `.env` (requires `TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_ID`/`_CLIENT_SECRET` and `TSANET_BETA_ENTRA_TENANT_ID`/`_AUDIENCE`/`_SCOPE`, plus the existing sdk1 API URL var) | key vault references |
 | Replicas | 1 (single-writer store + poller cursor) | availability design follows the storage answer |
 | Intercom app | private app, dev workspace | pilot: private app on the member workspace; GA: public listing |
 
@@ -201,9 +202,24 @@ signature verification works in both schemes).
 az group delete -n tsanet-fin-poc --yes --no-wait
 ```
 
-Plus the TSANet v2 webhook subscription (as sdk1) so BETA stops delivering.
+Plus the TSANet v2 webhook subscription (as the Connect Gateway member) so BETA stops delivering.
 
 ## Pointers
 
 - Runbook: [AZURE_POC.md](AZURE_POC.md) · spec: `deploy/containerapp.yaml.tmpl` · script: `scripts/azure-poc-deploy.sh`
 - Decisions: D1 (signature schemes) · D2 (latency budget) · D3 (verify effects) · D12 (durable links) · D14 (claim-before-create) · D16 (reconciliation) · D17 (per-workspace state ids) · D19 (submitter identity)
+
+## Identity cutover from sdk1 (one-time, 2026-08)
+
+The adapter's TSANet identity moved from sdk1 (password) to the Connect Gateway member
+(Entra client-credentials). The deploy script registers the member's own webhook
+subscription; sdk1's old subscription keeps delivering to the same callback signed with a
+secret the adapter no longer holds, so it must be deregistered once, using sdk1's
+credentials (still present in the ops `.env`):
+
+1. Login as sdk1 (`POST /v1/login`), list `GET /v2/webhooks`, note the subscription id for
+   this adapter's callback URL.
+2. `DELETE /v2/webhooks/{id}` as sdk1.
+
+Until that is done, expect signature-verification failures in the adapter log for every
+sdk1-case event; they are noise from the vacated identity, not a fault in the new one.
