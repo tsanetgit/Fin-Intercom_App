@@ -962,8 +962,8 @@ name/verdict/latency only), never persisted, never echoed.
 
 `tsanetgit/Fin-Intercom_App#45`. Response events (`response.created` /
 `response.updated`) drained and dropped until this slice — observed live 2026-08-11:
-Veritas accepted an outbound case, six events arrived in one second, and the ticket
-showed nothing. `PartnerResponseHandler` surfaces the verdict as two writes: the
+Veritas accepted an outbound case, six events arrived in one second (five of them
+status-bearing), and the ticket showed nothing. `PartnerResponseHandler` surfaces the verdict as two writes: the
 ticket state moves per D17's mapping, and an admin note names the verdict
 ("<partner> accepted the TSANet case.").
 

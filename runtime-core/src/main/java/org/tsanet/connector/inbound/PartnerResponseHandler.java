@@ -203,7 +203,19 @@ public class PartnerResponseHandler implements InboundEventHandler {
             return;
         }
 
-        links.surfacedStatus(token, status.name());
+        try {
+            links.surfacedStatus(token, status.name());
+        } catch (RuntimeException e) {
+            // The design's one admitted residual, stated where it happens: both
+            // platform writes landed but the dedup record did not, so a redelivery
+            // re-runs the surface and the note posts twice. Loud, because every other
+            // failure branch here is - and this is the only one that duplicates a
+            // partner-visible-adjacent write instead of losing one.
+            log.error("tsanet_audit event=response_record_failed token={} ticket={} reason={}"
+                    + " consequence=duplicate_note_on_redelivery",
+                    token, link.ticketId(), e.getMessage());
+            return;
+        }
         // state_id on the line so a misconfigured-but-real id is visible in the audit
         // stream, mirroring closure_applied (#27 auto-QA).
         log.info("tsanet_audit event=response_surfaced token={} ticket={} partner={} status={}"

@@ -212,6 +212,41 @@ class PartnerResponseHandlerTest {
     }
 
     @Test
+    void aFailedRecordWriteDuplicatesTheNoteOnRedeliveryAndSaysSo() {
+        // The design's one admitted residual (D22): both platform writes landed, the
+        // dedup record did not. A redelivery re-runs the whole surface — including a
+        // SECOND note — and this pins that as KNOWN behavior rather than a surprise.
+        outboundLink(TOKEN, TICKET);
+        fetchAnswers(TOKEN, InboundCase.Status.ACCEPTED);
+        SubmissionLinkTable recordFailsOnce = new DelegatingLinkTable(links) {
+            private boolean failed;
+
+            @Override
+            public void surfacedStatus(String token, String status) {
+                if (!failed) {
+                    failed = true;
+                    throw new IllegalStateException("cannot record the surfaced status");
+                }
+                super.surfacedStatus(token, status);
+            }
+        };
+        PartnerResponseHandler h = new PartnerResponseHandler(tsanet, intercom, recordFailsOnce,
+                InboundProperties.ofStateIds("4561712", IN_PROGRESS, WAITING, RESOLVED));
+
+        h.handle(responseCreated(TOKEN));
+        assertEquals(1, intercom.noteCalls(), "the note landed before the record failed");
+        assertNull(links.surfacedStatus(TOKEN), "and the failed record left nothing behind");
+
+        h.handle(responseUpdated(TOKEN));   // redelivery, the only recovery surface
+
+        assertEquals(2, intercom.noteCalls(),
+                "the admitted residual: an unrecorded surface re-posts the note");
+        assertEquals(2, intercom.stateMoveCalls(),
+                "and repeats the state move — same target id, idempotent in effect");
+        assertEquals("ACCEPTED", links.surfacedStatus(TOKEN), "the retry completes the record");
+    }
+
+    @Test
     void aClosedFetchDefersToTheClosureHandler() {
         outboundLink(TOKEN, TICKET);
         fetchAnswers(TOKEN, InboundCase.Status.CLOSED);

@@ -105,7 +105,9 @@ public interface IntercomGateway {
      * Posts an admin note on a ticket. {@code text} is PLAIN TEXT: implementations
      * escape it and wrap it in markup themselves, so no caller ever assembles HTML.
      *
-     * <p>Throws {@link IntercomException} when the note did not land. Callers decide
+     * <p>Throws {@link IntercomException} when the API reports failure. A silent 200
+     * that drops the note is NOT detected — no read-back exists for reply parts yet —
+     * so a dropped note is permanent once the caller records the surface. Callers decide
      * what a lost note costs — for response surfacing it blocks the dedup record, so a
      * redelivery retries the whole surface.
      */
