@@ -61,7 +61,7 @@ annotations. If the app's credentials rotate, update `.env` and re-run the deplo
   immediately and canvas renders are fast.
 - **Outbound:** open any ticket's Details panel → the app section → search a
   partner, fill the form (submitter email must be on the acting member's registered
-  domain — for sdk1 that means any `@sdk1.com` address), Submit. A "Case submitted"
+  domain — for the Connect Gateway member that means any `@connectgateway.com` address), Submit. A "Case submitted"
   card with a token is the proof.
 - **Inbound:** a partner-created case (test-flagged, from the sdk2 test member)
   becomes a `[TEST]`-titled ticket in the workspace within seconds via push, or
@@ -70,12 +70,12 @@ annotations. If the app's credentials rotate, update `.env` and re-run the deplo
 
 ## Precondition: one live adapter per member
 
-This must be the **only** adapter instance running against the sdk1 member.
+This must be the **only** adapter instance running against the Connect Gateway member.
 A second instance with its own link table (any other deployment of this repo
 pointed at the same credentials) races the poller and double-creates tickets for
 inbound cases — D14's unique-token claim protects each instance against its own
 duplicates, not two instances against each other. Before enabling this
-environment, confirm nothing else polls or receives webhooks as sdk1.
+environment, confirm nothing else polls or receives webhooks as the Connect Gateway member.
 
 ## 5. Teardown
 
@@ -85,7 +85,7 @@ az group delete -n tsanet-fin-poc --yes --no-wait
 
 Everything lives in that one resource group, including the auto-created Log
 Analytics workspace. If you overrode `AZ_RG`, delete that name instead. Also delete
-the TSANet v2 webhook subscription (as sdk1: `DELETE /v1/webhooks/{id}`) so BETA
+the TSANet v2 webhook subscription (as the Connect Gateway member: `DELETE /v2/webhooks/{id}`) so BETA
 stops attempting deliveries.
 
 ## Not production

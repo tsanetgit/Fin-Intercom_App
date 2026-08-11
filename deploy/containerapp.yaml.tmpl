@@ -86,6 +86,12 @@ properties:
             value: $TSANET_API_USER
           - name: TSANET_API_PASSWORD
             secretRef: tsanet-password
+          - name: TSANET_AUTH_MODE
+            value: $TSANET_AUTH_MODE
+          - name: TSANET_ENTRA_TENANT_ID
+            value: $TSANET_ENTRA_TENANT_ID
+          - name: TSANET_ENTRA_AUDIENCE
+            value: $TSANET_ENTRA_AUDIENCE
           - name: INTERCOM_ACCESS_TOKEN
             secretRef: intercom-token
           - name: INTERCOM_DEV_CLIENT_SECRET
