@@ -202,6 +202,8 @@ ADMIN_API_SECRET_VALUE="$ADMIN_API_SECRET" \
 PUBLIC_BASE_URL="${FQDN:+https://$FQDN}" \
 TICKET_TYPE_ID="${INTERCOM_COLLABORATION_TICKET_TYPE_ID:-4561712}" \
 RESOLVED_STATE_ID="${INTERCOM_RESOLVED_STATE_ID:-9619799}" \
+IN_PROGRESS_STATE_ID="${INTERCOM_IN_PROGRESS_STATE_ID:-9619797}" \
+WAITING_STATE_ID="${INTERCOM_WAITING_STATE_ID:-9619798}" \
 python3 - "$REPO/deploy/containerapp.yaml.tmpl" > "$SPEC" <<'EOF'
 import os, string, sys
 sys.stdout.write(string.Template(open(sys.argv[1]).read()).substitute(os.environ))
