@@ -113,6 +113,11 @@ that spec is now vendored in-repo and passed via `-Dconnect.openapi.spec`, so no
 checkout and no credential are required, and the `sdk` job is no longer gated — it runs
 on every PR. The verbatim-SDK rule above is unaffected.
 
+**UPDATED 2026-08-11:** the `oauth` branch merged to `main`
+(`tsanetgit/Connect_SDK#44`); the SDK stack is now consumed from `Connect_SDK`
+`main` (`shawn-tsanet/connect-sdk-demo` repointed in `shawn-tsanet/connect-sdk-demo#9`).
+The verbatim, no-fork rule and the vendored-spec mechanics (D11) are unchanged.
+
 ## D7. Skeleton non-goals
 
 No Spring Security (the HMAC filter is the whole auth story). No async executors (the

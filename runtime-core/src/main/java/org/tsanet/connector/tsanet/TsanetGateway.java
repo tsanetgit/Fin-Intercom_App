@@ -13,8 +13,9 @@ import org.tsanet.connector.tsanet.dto.SubmissionResult;
 /**
  * The seam to TSANet Connect. Implemented in the connect-gateway module on top of
  * com.tsanet:connect-library, which is consumed VERBATIM from tsanetgit/Connect_SDK
- * branch `oauth` (commit 0f57fac) until that branch merges; changes go upstream, never
- * into a local fork (docs/decisions.md D6).
+ * main (the oauth branch merged in tsanetgit/Connect_SDK#44; v0.1.0 still certifies
+ * against pin 0f57fac); changes go upstream, never into a local fork
+ * (docs/decisions.md D6).
  *
  * Rules that bind every implementation:
  * - Canvas handlers make AT MOST ONE gateway call per response, under a hard total
