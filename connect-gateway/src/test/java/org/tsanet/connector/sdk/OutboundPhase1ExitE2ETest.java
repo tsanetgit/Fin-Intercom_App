@@ -52,12 +52,14 @@ class OutboundPhase1ExitE2ETest {
 
     @DynamicPropertySource
     static void wireRealGateways(DynamicPropertyRegistry registry) {
+        // connector.tsanet.mode stays the operator switch (stands the Fake down);
+        // the engine's own config binds gateway.tsanet.* since the Fin swap (#42).
         registry.add("connector.tsanet.mode", () -> "sdk");
-        registry.add("connector.tsanet.sdk.api-base-url", () -> System.getenv("TSANET_SDK1_API_URL"));
-        registry.add("connector.tsanet.sdk.auth-mode", () -> "password");
-        registry.add("connector.tsanet.sdk.principal", () -> System.getenv("TSANET_SDK1_API_USER"));
-        registry.add("connector.tsanet.sdk.secret", () -> System.getenv("TSANET_SDK1_API_PASSWORD"));
-        registry.add("connector.tsanet.sdk.sqlite-path",
+        registry.add("gateway.tsanet.sdk.api-base-url", () -> System.getenv("TSANET_SDK1_API_URL"));
+        registry.add("gateway.tsanet.sdk.auth-mode", () -> "password");
+        registry.add("gateway.tsanet.sdk.principal", () -> System.getenv("TSANET_SDK1_API_USER"));
+        registry.add("gateway.tsanet.sdk.secret", () -> System.getenv("TSANET_SDK1_API_PASSWORD"));
+        registry.add("gateway.tsanet.sdk.sqlite-path",
                 () -> "target/e2e-sdk1-" + UUID.randomUUID() + ".db");
         registry.add("connector.intercom.mode", () -> "rest");
         registry.add("connector.intercom.access-token", () -> System.getenv("INTERCOM_DEV_ACCESS_TOKEN"));

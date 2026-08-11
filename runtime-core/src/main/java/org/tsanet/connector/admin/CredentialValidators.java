@@ -157,7 +157,7 @@ public class CredentialValidators {
     }
 
     private String tsanetBaseUrl() {
-        return env.getProperty("connector.tsanet.sdk.api-base-url", "");
+        return env.getProperty("gateway.tsanet.sdk.api-base-url", "");
     }
 
     private static Verdict failure(String target, long startNanos, Exception e) {

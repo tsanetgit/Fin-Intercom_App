@@ -59,7 +59,7 @@ public class AdminController {
             "connector.intercom-client-secret",
             "connector.tsanet-webhook-secret",
             "connector.intercom.access-token",
-            "connector.tsanet.sdk.secret");
+            "gateway.tsanet.sdk.secret");
 
     private final ConnectorProperties properties;
     private final InboundProperties inbound;

@@ -23,6 +23,9 @@ in CI because MockMvc does not reproduce Tomcat's decode-before-mapping. Missing
 secrets fail closed (401), never open.
 
 ## D2. Canvas latency budget: <2s, structurally enforced
+> Since the Fin swap (#42): the deadline machinery this record cites lives in the
+> published `gateway-engine` artifact (Connect_Gateway repo), which now owns it.
+
 
 Measured 2026-08-04: an 8s canvas response renders; a 10s response fails. Failure UX is
 asymmetric: slow initialize shows an error card with a working "Try again"; slow submit
@@ -100,6 +103,11 @@ the reconciliation poller remains the source of truth in both directions.
   never rendered; genuinely unrenderable types (FILES etc.) keep the loud failure.
 
 ## D6. Module split and the SDK pin
+> Since the Fin swap (#42): the connect-gateway module no longer carries engine
+> sources or a direct connect-library pin - it consumes
+> `org.tsanet.connector:gateway-engine` (which pins connect-library), and the
+> module is the sdk-mode assembly only.
+
 
 `runtime-core` has no Connect SDK dependency and must never import `com.tsanet.*`.
 `connect-gateway` carries `com.tsanet:connect-library:0.0.1-SNAPSHOT` and is included
@@ -151,6 +159,10 @@ so generated links are the only live link syntax. Known rendering caveat: #7
 (single-select option labels truncate at default panel width on option-heavy forms).
 
 ## D9. SDK gateway: generated client, per-member pairing, bounded and sanitized
+> Since the Fin swap (#42): this implementation lives in the published
+> `gateway-engine` (Connect_Gateway repo) as `org.tsanet.gateway.engine`; the
+> invariants stand, enforced and tested there.
+
 
 The slice-2 `SdkTsanetGateway` consumes the Connect SDK's **public generated client**
 (`com.tsanet.api.generated.*`) rather than its facades, because the facade layer cannot

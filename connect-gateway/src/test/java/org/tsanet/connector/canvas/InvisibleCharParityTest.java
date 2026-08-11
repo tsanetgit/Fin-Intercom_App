@@ -19,7 +19,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.RestClientResponseException;
-import org.tsanet.connector.sdk.SdkTsanetGateway;
+import org.tsanet.gateway.engine.SdkTsanetGateway;
 
 /**
  * Drift guard for a security decision that lives in two places: the canvas

@@ -12,7 +12,32 @@
 
   <artifactId>connect-gateway</artifactId>
   <name>connect-gateway</name>
-  <description>Connect SDK binding (com.tsanet:connect-library consumed verbatim; docs/decisions.md D6).</description>
+  <description>SDK-mode assembly: imports the published gateway-engine (docs/decisions.md D6; Fin swap #42) and packages the deployable.</description>
+
+  <properties>
+    <gateway-engine.version>0.1.2</gateway-engine.version>
+  </properties>
+
+  <!-- Where the engine resolves from. GitHub Packages needs a token even for
+       reads; the `github` server id in settings.xml carries it. -->
+  <repositories>
+    <repository>
+      <id>github</id>
+      <name>GitHub Packages - tsanetgit/Connect_Gateway</name>
+      <url>https://maven.pkg.github.com/tsanetgit/Connect_Gateway</url>
+      <snapshots><enabled>false</enabled></snapshots>
+    </repository>
+    <!-- The engine's transitive connect-library lives in the Connect_SDK registry.
+         Declared explicitly with its own id rather than relying on the id-collision
+         behavior between this pom's `github` and the engine pom's `github`: same
+         token, second settings server entry. -->
+    <repository>
+      <id>github-sdk</id>
+      <name>GitHub Packages - tsanetgit/Connect_SDK</name>
+      <url>https://maven.pkg.github.com/tsanetgit/Connect_SDK</url>
+      <snapshots><enabled>false</enabled></snapshots>
+    </repository>
+  </repositories>
 
   <dependencies>
     <dependency>
@@ -21,9 +46,12 @@
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>com.tsanet</groupId>
-      <artifactId>connect-library</artifactId>
-      <version>${connect-library.version}</version>
+      <!-- The published engine (tsanetgit/Connect_Gateway v0.1.2). Brings
+           com.tsanet:connect-library 0.1.0 transitively; this module carries no
+           engine sources since the Fin swap (#42) - the frozen copy is retired. -->
+      <groupId>org.tsanet.connector</groupId>
+      <artifactId>gateway-engine</artifactId>
+      <version>${gateway-engine.version}</version>
     </dependency>
     <dependency>
       <!-- The shared gateway contract test (runtime-core test-jar). -->
