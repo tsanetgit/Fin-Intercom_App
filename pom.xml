@@ -21,7 +21,6 @@
 
   <properties>
     <java.version>21</java.version>
-    <connect-library.version>0.0.1-SNAPSHOT</connect-library.version>
   </properties>
 
   <!--

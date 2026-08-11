@@ -1,7 +1,14 @@
 # Vendored: TSANet Connect Core API spec
 
+> **Historical since the Fin swap (#42, 2026-08-11):** `connect-library` now
+> arrives prebuilt inside the published `gateway-engine` artifact, so nothing in
+> this repository runs codegen against this spec anymore - the CI step that made
+> it load-bearing is gone, and `tsanetgit/Connect_SDK` owns codegen and its spec
+> handling. Kept as a reference snapshot; do not treat its refresh notes as a
+> live obligation.
+
 `openapi.yaml` here is a **byte-identical copy** of the transport contract that
-`connect-library`'s codegen consumes. It is vendored so CI can build the `sdk`
+`connect-library`'s codegen consumed. It was vendored so CI could build the `sdk`
 profile without reaching into a private repository.
 
 ## Provenance

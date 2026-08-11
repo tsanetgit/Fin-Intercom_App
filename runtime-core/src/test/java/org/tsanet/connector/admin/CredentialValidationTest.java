@@ -98,7 +98,7 @@ class CredentialValidationTest {
     static void stubUrls(DynamicPropertyRegistry registry) {
         String base = "http://127.0.0.1:" + STUB.getAddress().getPort();
         registry.add("connector.intercom.api-base-url", () -> base);
-        registry.add("connector.tsanet.sdk.api-base-url", () -> base);
+        registry.add("gateway.tsanet.sdk.api-base-url", () -> base);
     }
 
     @AfterAll

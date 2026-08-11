@@ -8,17 +8,6 @@ connector:
   # when mode=sdk; empty values otherwise stay inert.
   tsanet:
     mode: fake
-    sdk:
-      api-base-url: ${TSANET_API_URL:}
-      auth-mode: ${TSANET_AUTH_MODE:password}   # password | client_credentials
-      principal: ${TSANET_API_USER:}            # username/email, or Entra client id
-      secret: ${TSANET_API_PASSWORD:}           # password, or Entra client secret
-      entra-tenant-id: ${TSANET_ENTRA_TENANT_ID:}
-      entra-audience: ${TSANET_ENTRA_AUDIENCE:}
-      sqlite-path: ${TSANET_SDK_SQLITE_PATH:data/connect-sdk.db}
-      # test-submission defaults TRUE: real partner cases are a per-deployment opt-in
-      # at pilot time (the upstream facade hardcodes true - connect-sdk-demo#6).
-      test-submission: ${TSANET_TEST_SUBMISSION:true}
   # fake = fixture Intercom gateway (dev/test); rest = real Intercom API (annotation
   # pipeline). The fake refuses the prod profile; rest mode fails fast without a token.
   inbound:
@@ -78,3 +67,22 @@ connector:
   max-body-bytes: 1048576
   dedupe-capacity: 10000
   queue-capacity: 10000
+
+# The published gateway engine binds gateway.tsanet.* (the canonical prefix from
+# the extraction). mode bridges from connector.tsanet.mode so the operator surface
+# - env var names, run scripts, the deploy template - is unchanged by the Fin swap
+# (#42). The sdk block moved here verbatim; it binds only when mode=sdk.
+gateway:
+  tsanet:
+    mode: ${connector.tsanet.mode:fake}
+    sdk:
+      api-base-url: ${TSANET_API_URL:}
+      auth-mode: ${TSANET_AUTH_MODE:password}   # password | client_credentials
+      principal: ${TSANET_API_USER:}            # username/email, or Entra client id
+      secret: ${TSANET_API_PASSWORD:}           # password, or Entra client secret
+      entra-tenant-id: ${TSANET_ENTRA_TENANT_ID:}
+      entra-audience: ${TSANET_ENTRA_AUDIENCE:}
+      sqlite-path: ${TSANET_SDK_SQLITE_PATH:data/connect-sdk.db}
+      # test-submission defaults TRUE: real partner cases are a per-deployment opt-in
+      # at pilot time (the upstream facade hardcodes true - connect-sdk-demo#6).
+      test-submission: ${TSANET_TEST_SUBMISSION:true}
