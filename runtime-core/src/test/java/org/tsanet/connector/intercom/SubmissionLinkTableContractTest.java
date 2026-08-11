@@ -224,6 +224,22 @@ public abstract class SubmissionLinkTableContractTest {
     }
 
     @Test
+    void aSurfacedStatusIsRecordedPerTransitionAndReadsBack() {
+        table().record(link("TSA-surf", "flow-surf", "conv-surf"));
+        assertNull(table().surfacedStatus("TSA-surf"),
+                "null IS the nothing-surfaced-yet value; a default here would dedup the"
+                        + " first real verdict into silence");
+        table().surfacedStatus("TSA-surf", "ACCEPTED");
+        assertEquals("ACCEPTED", table().surfacedStatus("TSA-surf"));
+        table().surfacedStatus("TSA-surf", "INFORMATION");  // a transition overwrites
+        assertEquals("INFORMATION", table().surfacedStatus("TSA-surf"));
+        table().surfacedStatus("TSA-surf", "  ");  // blank never erases a real record
+        assertEquals("INFORMATION", table().surfacedStatus("TSA-surf"));
+        table().surfacedStatus("no-such-token", "ACCEPTED");  // missing row: a no-op
+        assertNull(table().surfacedStatus("no-such-token"));
+    }
+
+    @Test
     void absentKeysAnswerEmpty() {
         table().record(link("TSA-4", "flow-4", "conv-4"));
         assertTrue(table().byToken("nope").isEmpty());
@@ -248,6 +264,8 @@ public abstract class SubmissionLinkTableContractTest {
         assertTrue(table().byConversationId(null).isEmpty());
         assertEquals(AnnotationState.NONE, table().annotationState(null),
                 "a null token has no state, the same answer an unknown token gets");
+        assertNull(table().surfacedStatus(null),
+                "a null token has no surfaced status, the same answer an unknown token gets");
 
         // The write arity asserted by its EFFECT, not by "it did not throw": a store
         // that swallowed the null and wrote somewhere would pass the weaker check.
@@ -255,6 +273,9 @@ public abstract class SubmissionLinkTableContractTest {
         assertEquals(AnnotationState.FULL, table().annotationState("TSA-n"),
                 "a null-token write must not reach a real link's state");
         assertEquals(AnnotationState.NONE, table().annotationState(null));
+        table().surfacedStatus(null, "ACCEPTED");
+        assertNull(table().surfacedStatus("TSA-n"),
+                "a null-token surfaced-status write must not reach a real link");
         assertEquals(1, table().size(), "a null-token write must not conjure a link");
     }
 
