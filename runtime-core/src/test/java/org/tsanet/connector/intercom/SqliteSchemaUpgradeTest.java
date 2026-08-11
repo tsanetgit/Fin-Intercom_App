@@ -1,6 +1,7 @@
 package org.tsanet.connector.intercom;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
@@ -74,6 +75,8 @@ class SqliteSchemaUpgradeTest {
         assertEquals("api-old", table.byTicketId("api-old").orElseThrow().ticketId());
         assertEquals(CaseState.PENDING, table.caseState("TSA-old"),
                 "a row written before the column existed defaults to PENDING");
+        assertNull(table.surfacedStatus("TSA-old"),
+                "a pre-surfacing row has no surfaced status — null, not an error");
 
         // And so are the writes: record() failed outright, which meant a new inbound
         // case could not even be claimed.
@@ -82,6 +85,9 @@ class SqliteSchemaUpgradeTest {
         assertTrue(table.caseState("TSA-new", CaseState.PENDING, CaseState.ACCEPTED));
         table.caseNumber("TSA-new", "9900123");
         assertEquals("9900123", table.byToken("TSA-new").orElseThrow().caseNumber());
+        table.surfacedStatus("TSA-old", "ACCEPTED");
+        assertEquals("ACCEPTED", table.surfacedStatus("TSA-old"),
+                "the evolved column accepts writes on a pre-existing row");
         assertEquals(2, table.size());
     }
 

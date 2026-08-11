@@ -122,6 +122,44 @@ public class FakeIntercomGateway implements IntercomGateway {
         return stateMoveCalls.get();
     }
 
+    @Override
+    public void moveOpenTicketState(String ticketId, String stateId) {
+        // Same counter and injection flag as the terminal move on purpose: handler
+        // tests probe "was Intercom called at all", and which of the two entry points
+        // carried the call is visible via stateOf() either way.
+        moveTicketState(ticketId, stateId);
+    }
+
+    private final List<String> notesByTicket = new CopyOnWriteArrayList<>();
+    private final AtomicInteger noteCalls = new AtomicInteger();
+    /** Set to make the next note post throw, for the handler's failure ordering. */
+    public volatile boolean failNextNote;
+
+    @Override
+    public void postTicketNote(String ticketId, String text) {
+        // Counted BEFORE validation, mirroring moveTicketState: a caller that should
+        // not have called at all is distinguishable from one that called badly.
+        noteCalls.incrementAndGet();
+        if (ticketId == null || ticketId.isBlank() || text == null || text.isBlank()) {
+            throw new IntercomException("postTicketNote needs a ticket id and a non-blank note");
+        }
+        if (failNextNote) {
+            failNextNote = false;
+            throw new IntercomException("injected note failure");
+        }
+        notesByTicket.add(ticketId + "|" + text);
+    }
+
+    /** How many note posts were ATTEMPTED, valid or not — the never-called probe. */
+    public int noteCalls() {
+        return noteCalls.get();
+    }
+
+    /** Notes that landed, as "ticketId|text" in arrival order. */
+    public List<String> notes() {
+        return List.copyOf(notesByTicket);
+    }
+
     /** The state a ticket was last moved to, or null. */
     public String stateOf(String ticketId) {
         return statesByTicket.get(ticketId);

@@ -85,6 +85,8 @@ export INTERCOM_COLLABORATION_TICKET_TYPE_ID="${INTERCOM_COLLABORATION_TICKET_TY
 # Dev workspace, type 4561712: Submitted 9619796, In progress 9619797,
 # Waiting on customer 9619798, Resolved 9619799.
 export INTERCOM_RESOLVED_STATE_ID="${INTERCOM_RESOLVED_STATE_ID:-9619799}"
+export INTERCOM_IN_PROGRESS_STATE_ID="${INTERCOM_IN_PROGRESS_STATE_ID:-9619797}"
+export INTERCOM_WAITING_STATE_ID="${INTERCOM_WAITING_STATE_ID:-9619798}"
 
 # THE POINT OF THIS SCRIPT. Absolute path, because a relative one resolves
 # against the working directory — which in a container is the overlay
@@ -105,6 +107,8 @@ echo "port         : $PORT"
 echo "link store   : sqlite at $CONNECTOR_LINKS_SQLITE_PATH"
 echo "ticket type  : $INTERCOM_COLLABORATION_TICKET_TYPE_ID"
 echo "resolved st. : $INTERCOM_RESOLVED_STATE_ID"
+echo "in-prog st.  : $INTERCOM_IN_PROGRESS_STATE_ID"
+echo "waiting st.  : $INTERCOM_WAITING_STATE_ID"
 echo "log          : $LOG"
 echo
 

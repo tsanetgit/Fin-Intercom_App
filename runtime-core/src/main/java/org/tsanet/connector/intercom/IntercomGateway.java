@@ -79,6 +79,40 @@ public interface IntercomGateway {
      */
     void moveTicketState(String ticketId, String stateId);
 
+    /**
+     * Moves a ticket to a NON-terminal state (In progress, Waiting on customer), by
+     * state id, and VERIFIES it landed — by a different mechanism than
+     * {@link #moveTicketState}, because the open-flag check is vacuous for a ticket
+     * that stays open.
+     *
+     * <p>The verification compares the read-back {@code ticket_state.id} against the id
+     * written. That field exists only in the OBJECT representation of
+     * {@code ticket_state}, which the workspace serves when the app's default API
+     * version is recent enough (probed live 2026-08-11 on the dev workspace: an
+     * unversioned read returns {@code {id, category, internal_label, ...}}, while a
+     * {@code Intercom-Version: 2.11} read returns a bare string AND a 2.11 write is
+     * silently ignored — the app-default version is what this connector actually runs
+     * under, since it pins no version header). If the read-back comes back as the old
+     * string shape, implementations must THROW rather than pass unverified: a
+     * non-terminal write that cannot be verified is exactly the D3 silent-200 surface.
+     *
+     * @throws IntercomException if the write fails, or the read-back does not carry the
+     *     written state id
+     */
+    void moveOpenTicketState(String ticketId, String stateId);
+
+    /**
+     * Posts an admin note on a ticket. {@code text} is PLAIN TEXT: implementations
+     * escape it and wrap it in markup themselves, so no caller ever assembles HTML.
+     *
+     * <p>Throws {@link IntercomException} when the API reports failure. A silent 200
+     * that drops the note is NOT detected — no read-back exists for reply parts yet —
+     * so a dropped note is permanent once the caller records the surface. Callers decide
+     * what a lost note costs — for response surfacing it blocks the dedup record, so a
+     * redelivery retries the whole surface.
+     */
+    void postTicketNote(String ticketId, String text);
+
     /** Cheap credential/reachability probe (GET /me). */
     boolean healthy();
 

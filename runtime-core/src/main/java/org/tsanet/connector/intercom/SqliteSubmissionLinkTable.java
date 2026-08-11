@@ -130,7 +130,11 @@ public class SqliteSubmissionLinkTable implements SubmissionLinkTable {
      */
     private static final Map<String, String> EVOLVED_COLUMNS = new LinkedHashMap<>(Map.of(
             "case_state", "TEXT NOT NULL DEFAULT 'PENDING'",
-            "case_number", "TEXT"));
+            "case_number", "TEXT",
+            // Nullable on purpose: null IS the "nothing surfaced yet" value, and every
+            // pre-existing row (outbound links from before response surfacing) starts
+            // there correctly.
+            "surfaced_status", "TEXT"));
 
     /**
      * Creates the table on a fresh file, and EVOLVES one that already exists.
@@ -375,6 +379,41 @@ public class SqliteSubmissionLinkTable implements SubmissionLinkTable {
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("cannot record the case number", e);
+        }
+    }
+
+    @Override
+    public String surfacedStatus(String token) {
+        if (token == null) {
+            return null;
+        }
+        try (Connection c = dataSource.getConnection();
+                PreparedStatement ps = c.prepareStatement(
+                        "SELECT surfaced_status FROM submission_link WHERE token = ?")) {
+            ps.setString(1, token);
+            try (ResultSet rs = ps.executeQuery()) {
+                // Read verbatim, no enum parse: an unrecognised stored value must
+                // surface to the handler's comparison, not explode the select.
+                return rs.next() ? rs.getString(1) : null;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("cannot read the surfaced status", e);
+        }
+    }
+
+    @Override
+    public void surfacedStatus(String token, String status) {
+        if (token == null || status == null || status.isBlank()) {
+            return;
+        }
+        try (Connection c = dataSource.getConnection();
+                PreparedStatement ps = c.prepareStatement(
+                        "UPDATE submission_link SET surfaced_status = ? WHERE token = ?")) {
+            ps.setString(1, status);
+            ps.setString(2, token);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("cannot record the surfaced status", e);
         }
     }
 

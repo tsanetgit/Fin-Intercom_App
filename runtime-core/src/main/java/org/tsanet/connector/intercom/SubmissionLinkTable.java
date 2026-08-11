@@ -132,5 +132,29 @@ public interface SubmissionLinkTable {
      * independently of whatever convention produced it. */
     void caseNumber(String token, String caseNumber);
 
+    /**
+     * The last partner-response status surfaced onto this link's ticket, or null when
+     * none ever was. This is the response-surfacing dedup record: TSANet delivers a
+     * burst of response events for one verdict (5 status-bearing events in one second,
+     * observed live 2026-08-11), and the handler surfaces a verdict once per
+     * TRANSITION, not once per delivery. Stored as the raw status name rather than an
+     * enum so the table stays dumb storage — the handler owns interpretation, and an
+     * unrecognised stored value reads back verbatim instead of exploding a select.
+     *
+     * <p>Distinct from {@link #caseState(String)} ON PURPOSE: caseState is OUR
+     * response to an inbound case (it guards the panel against answering a partner
+     * twice); this records the PARTNER's response to our outbound case. Writing one
+     * from the other flow would trip the other's guard.
+     */
+    String surfacedStatus(String token);
+
+    /**
+     * Records a surfaced partner-response status. A plain setter, not a CAS: the
+     * single event-drain thread is the only writer of this column, so there is no
+     * race to lose — unlike {@link #caseState(String, CaseState, CaseState)}, whose
+     * competing writer is an agent clicking in the panel.
+     */
+    void surfacedStatus(String token, String status);
+
     int size();
 }

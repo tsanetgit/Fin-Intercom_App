@@ -86,6 +86,16 @@ abstract class DelegatingLinkTable implements SubmissionLinkTable {
     }
 
     @Override
+    public String surfacedStatus(String token) {
+        return delegate.surfacedStatus(token);
+    }
+
+    @Override
+    public void surfacedStatus(String token, String status) {
+        delegate.surfacedStatus(token, status);
+    }
+
+    @Override
     public int size() {
         return delegate.size();
     }

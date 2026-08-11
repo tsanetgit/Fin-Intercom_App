@@ -163,6 +163,65 @@ class RestIntercomGatewayTest {
                         + " operator can actually fix: " + e.getMessage());
     }
 
+    // ---- moveOpenTicketState / verifyOpenStateLanded (#45): non-terminal targets,
+    // where the open flag is true before AND after — the id in the ticket_state
+    // OBJECT is the only thing that can prove the write landed. ----
+
+    @Test
+    void openStateMoveVerifiesByTheReadBackId() {
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andExpect(content().json("{\"ticket_state_id\":\"9619797\"}"))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"open\":true,\"ticket_state\":{\"id\":\"9619797\","
+                        + "\"category\":\"in_progress\"}}", MediaType.APPLICATION_JSON));
+        gateway.moveOpenTicketState("ticket-9", "9619797");
+        server.verify();
+    }
+
+    @Test
+    void openStateMoveWithAWrongReadBackIdThrows() {
+        // The silent-200 shape for a non-terminal write: 200 on the PUT, but the
+        // ticket still carries some other state's id.
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"open\":true,\"ticket_state\":{\"id\":\"9619796\","
+                        + "\"category\":\"submitted\"}}", MediaType.APPLICATION_JSON));
+        IntercomException e = assertThrows(IntercomException.class,
+                () -> gateway.moveOpenTicketState("ticket-9", "9619797"));
+        assertTrue(e.getMessage().contains("did not land"),
+                "an unmoved state must surface as failure: " + e.getMessage());
+    }
+
+    @Test
+    void openStateMoveOnAStringShapeReadBackThrowsRatherThanPassingUnverified() {
+        // The old-API-version representation, probed live 2026-08-11: ticket_state as
+        // a bare string — AND on that version the write itself is silently ignored,
+        // so passing here would report success for a write that never happened.
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"open\":true,\"ticket_state\":\"submitted\"}",
+                        MediaType.APPLICATION_JSON));
+        IntercomException e = assertThrows(IntercomException.class,
+                () -> gateway.moveOpenTicketState("ticket-9", "9619797"));
+        assertTrue(e.getMessage().contains("unverifiable"),
+                "the error must say WHY: the version predates the object shape: " + e.getMessage());
+    }
+
+    @Test
+    void aTicketNoteEscapesItsTextAndPostsAsAnAdminNote() {
+        server.expect(requestTo(BASE + "/tickets/ticket-9/reply")).andExpect(method(HttpMethod.POST))
+                .andExpect(content().json("{\"message_type\":\"note\",\"type\":\"admin\","
+                        + "\"admin_id\":\"admin-1\","
+                        + "\"body\":\"<p>Partner &amp; Co accepted the TSANet case.</p>\"}"))
+                .andRespond(withSuccess("{\"id\":\"part-1\",\"part_type\":\"note\"}",
+                        MediaType.APPLICATION_JSON));
+        gateway.postTicketNote("ticket-9", "Partner & Co accepted the TSANet case.");
+        server.verify();
+    }
+
     @Test
     void stateMoveReadBackFailureIsAFailureNotSuccess() {
         server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))

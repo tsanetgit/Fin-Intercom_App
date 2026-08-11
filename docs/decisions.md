@@ -957,3 +957,47 @@ rotate-yourself-into-lockout path. Per-name probes are rate-bounded (10s) becaus
 repeated failed logins against a real IdP can trip account lockout. The staged
 value lives in memory for one round-trip: never logged (the audit line carries
 name/verdict/latency only), never persisted, never echoed.
+
+## D22. Partner responses surface once per transition, keyed on the fetched status
+
+`tsanetgit/Fin-Intercom_App#45`. Response events (`response.created` /
+`response.updated`) drained and dropped until this slice — observed live 2026-08-11:
+Veritas accepted an outbound case, six events arrived in one second (five of them
+status-bearing), and the ticket showed nothing. `PartnerResponseHandler` surfaces the verdict as two writes: the
+ticket state moves per D17's mapping, and an admin note names the verdict
+("<partner> accepted the TSANet case.").
+
+**The dedup record is the fetched status, stored durably per link**
+(`surfaced_status`, schema evolution). Not the ticket state: two verdicts map to one
+state (REJECTED and CLOSED both Resolve), a ticket can sit at the target state for
+unrelated reasons, and an in-memory guard dies with the process while redelivery —
+the only recovery surface (D4) — outlives it. A verdict surfaces when the FETCHED
+status differs from the last surfaced one, so the five-events-one-second burst
+surfaces once and a real INFORMATION→ACCEPTED transition surfaces twice.
+
+**The fetch is the truth, not the event** (D3): the event contributes only the token.
+**Ordering is platform-then-record** (state, note, then the dedup write), same
+rationale as D18 — a failure before the record leaves the whole surface retryable,
+and the stated residual is one duplicate note if the note lands and the record write
+is lost.
+
+**Refused, deliberately:** INBOUND-direction cases (every response event there is an
+echo of our own panel action; a "Partner accepted" note would be false); CLOSED
+(`REQUEST_CLOSED` is closure's event, D18 owns it); OPEN (a raced fetch with no
+verdict — nothing recorded, so the next delivery retries); PENDINGACTION/UNKNOWN
+(unmapped per D17, nothing recorded); ticketless links (an outbound submit from a
+plain Inbox conversation has no ticket state to move — the conversation-note-only
+surface is the named follow-up on #45). The handler never writes `CaseState`: that
+field is OUR response to an inbound case and other flows guard on it.
+
+**Non-terminal state writes verify by id, not by the open flag.** The closure-era
+read-back asserts `open=false`, which is vacuous for In progress / Waiting on
+customer. Probed live 2026-08-11 on the dev workspace: under the app's DEFAULT API
+version (the connector pins none), `ticket_state` reads back as an object carrying
+`id` and `category` — so `moveOpenTicketState` compares the written id against the
+read-back id exactly. Under `Intercom-Version: 2.11` the same read returns a bare
+string AND the write itself is silently ignored, so a string-shaped read-back THROWS
+instead of passing: on such a version the write may not have happened at all. This
+also records a standing dependency: the adapter's behavior rides on the app's
+default-version setting in the Developer Hub, and pinning a version header is a
+deliberate follow-up, not a config knob to flip casually.

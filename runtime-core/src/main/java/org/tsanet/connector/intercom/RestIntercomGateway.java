@@ -134,6 +134,71 @@ public class RestIntercomGateway implements IntercomGateway {
         verifyStateLanded(ticketId, stateId);
     }
 
+    @Override
+    public void moveOpenTicketState(String ticketId, String stateId) {
+        if (ticketId == null || ticketId.isBlank() || stateId == null || stateId.isBlank()) {
+            throw new IntercomException("moveOpenTicketState needs both a ticket id and a state id");
+        }
+        try {
+            http.put(baseUrl + "/tickets/" + ticketId, Map.of("ticket_state_id", stateId));
+        } catch (RestClientResponseException e) {
+            throw fail("state", e);
+        }
+        verifyOpenStateLanded(ticketId, stateId);
+    }
+
+    /**
+     * D3 applied to a NON-terminal state write, where the open-flag check proves
+     * nothing (the ticket is open before and after the move). The read-back compares
+     * {@code ticket_state.id} — a field that exists only in the OBJECT representation
+     * of {@code ticket_state}, which the workspace serves under the app's default API
+     * version (probed live 2026-08-11 on the dev workspace: an unversioned read
+     * returns {@code {id, category, internal_label, ...}}, while a
+     * {@code Intercom-Version: 2.11} read returns a bare string AND a 2.11 write is
+     * silently ignored). A string read-back therefore THROWS instead of passing: it
+     * means the app's default version predates the object shape, and on such a
+     * version the write itself may have been ignored — the exact D3 silent-200
+     * surface this verification exists for.
+     */
+    private void verifyOpenStateLanded(String ticketId, String stateId) {
+        Map<?, ?> ticket;
+        try {
+            ticket = http.getForObject(baseUrl + "/tickets/" + ticketId, Map.class);
+        } catch (RestClientResponseException e) {
+            throw fail("state read-back", e);
+        }
+        Object state = ticket == null ? null : ticket.get("ticket_state");
+        if (!(state instanceof Map<?, ?> stateObject)) {
+            throw new IntercomException("state write to ticket " + ticketId + " is unverifiable:"
+                    + " ticket_state read back as "
+                    + (state == null ? "null" : "'" + state + "' (string shape)")
+                    + " — the app's default API version predates the ticket_state object, and"
+                    + " a non-terminal write on such a version is silently ignored (probed"
+                    + " 2026-08-11); raise the app's default version in the Developer Hub");
+        }
+        Object landed = stateObject.get("id");
+        if (landed == null || !stateId.equals(String.valueOf(landed))) {
+            throw new IntercomException("state write did not land on ticket " + ticketId
+                    + ": wrote state id " + stateId + ", read back id " + landed);
+        }
+    }
+
+    @Override
+    public void postTicketNote(String ticketId, String text) {
+        if (ticketId == null || ticketId.isBlank() || text == null || text.isBlank()) {
+            throw new IntercomException("postTicketNote needs a ticket id and a non-blank note");
+        }
+        try {
+            http.postForObject(baseUrl + "/tickets/" + ticketId + "/reply", Map.of(
+                    "message_type", "note",
+                    "type", "admin",
+                    "admin_id", adminId,
+                    "body", "<p>" + escape(text) + "</p>"), Map.class);
+        } catch (RestClientResponseException e) {
+            throw fail("note", e);
+        }
+    }
+
     /**
      * D3 applied to the state write: asserts the ticket's {@code open} flag went false.
      * It cannot compare states by name — the write takes an id, the read gives a

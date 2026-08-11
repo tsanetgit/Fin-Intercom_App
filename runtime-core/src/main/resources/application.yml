@@ -40,6 +40,13 @@ connector:
     # Dev workspace, type 4561712: Submitted 9619796, In progress 9619797,
     # Waiting on customer 9619798, Resolved 9619799.
     resolved-state-id: ${INTERCOM_RESOLVED_STATE_ID:}
+    # The two NON-terminal targets in D17's mapping, surfaced by partner responses
+    # (tsanetgit/Fin-Intercom_App#45): In progress = a partner accepted, Waiting on
+    # customer = a partner asked us for more information. Same species as
+    # resolved-state-id: per-workspace, resolved out of band, and an unset id refuses
+    # only the statuses that need it (each refusal is its own error-level audit line).
+    in-progress-state-id: ${INTERCOM_IN_PROGRESS_STATE_ID:}
+    waiting-state-id: ${INTERCOM_WAITING_STATE_ID:}
 
   intercom:
     mode: fake

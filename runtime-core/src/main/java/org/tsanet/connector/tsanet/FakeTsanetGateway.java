@@ -131,13 +131,26 @@ public class FakeTsanetGateway implements TsanetGateway {
         return Optional.ofNullable(submitted.get(internalCaseNumber));
     }
 
+    // Seeded single-case reads, consulted by fetchByToken AFTER the failure
+    // injections (an injected failure should beat a seed, as it does live) and BEFORE
+    // the prefix patterns, so a test can serve any (direction, status) pair without
+    // inventing a new token convention per combination.
+    private final Map<String, InboundCase> fetchSeeds = new ConcurrentHashMap<>();
+
+    /** Serves this exact case from {@link #fetchByToken} for its token. Re-seeding the
+     * same token replaces the case — which is how a test expresses a TRANSITION. */
+    public void seedFetch(InboundCase inboundCase) {
+        fetchSeeds.put(inboundCase.token(), inboundCase);
+    }
+
     /**
      * Fixture inbound cases, keyed by token. A token starting {@code failfetch} throws
      * (so handlers can be built against a failing read), {@code inbound-terminal}
      * yields a partner case already CLOSED (the late-event-after-close case #28
      * guards), {@code inbound-} yields a live partner-originated case, and
      * {@code outbound-} yields one of our own — the case a handler must NOT create a
-     * ticket for. Anything else is unknown.
+     * ticket for. Cases seeded via {@link #seedFetch} win over the prefixes. Anything
+     * else is unknown.
      */
     @Override
     public Optional<InboundCase> fetchByToken(String token) {
@@ -149,6 +162,10 @@ public class FakeTsanetGateway implements TsanetGateway {
         }
         if (token.startsWith("timeoutfetch")) {
             throw new GatewayTimeoutException("Connect API timed out (fetchByToken, >1500ms)");
+        }
+        InboundCase seeded = fetchSeeds.get(token);
+        if (seeded != null) {
+            return Optional.of(seeded);
         }
         if (token.startsWith("inbound-terminal")) {
             // Checked before the inbound- prefix, which it also matches.

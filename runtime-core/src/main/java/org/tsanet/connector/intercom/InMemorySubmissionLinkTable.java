@@ -221,6 +221,29 @@ public class InMemorySubmissionLinkTable implements SubmissionLinkTable {
         });
     }
 
+    // A side map rather than an Entry component: the surfaced status is bookkeeping
+    // ABOUT the link, not part of it — the same reason it is not a SubmissionLink
+    // field.
+    private final Map<String, String> surfacedByToken = new ConcurrentHashMap<>();
+
+    @Override
+    public String surfacedStatus(String token) {
+        return token == null ? null : surfacedByToken.get(token);
+    }
+
+    @Override
+    public void surfacedStatus(String token, String status) {
+        if (token == null || status == null || status.isBlank()) {
+            return;
+        }
+        // Recorded only for links that exist, mirroring the sqlite UPDATE's no-op on a
+        // missing row — divergence here would let a test pass against a write the
+        // production impl silently drops.
+        if (byToken.containsKey(token)) {
+            surfacedByToken.put(token, status);
+        }
+    }
+
     @Override
     public int size() {
         return byToken.size();
