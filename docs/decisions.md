@@ -1043,3 +1043,124 @@ instead of passing: on such a version the write may not have happened at all. Th
 also records a standing dependency: the adapter's behavior rides on the app's
 default-version setting in the Developer Hub, and pinning a version header is a
 deliberate follow-up, not a config knob to flip casually.
+
+## D23. A case can be answered without acceptance but not retired without it, and that asymmetry is what lets inbound stay off a ticket
+
+**A finding and a direction, not an implementation.** Nothing here is built. It exists
+because the next slice would otherwise start from an assumption that is half wrong.
+
+Inbound lands every case on a ticket (D14), because the ticket carries the states, the
+attributes and the response panel. On this platform that fights the grain: Fin's premise is
+that a conversation is tried first and a ticket exists only once work escalates. For the
+Anthropic pilot — partner Microsoft, on Salesforce — the question is whether an inbound
+collaboration can be **answered** and then **retired** without ever becoming a ticket.
+
+### Measured live on BETA, 2026-08-14
+
+Submitter Test Zendesk -> receiver Test Company 3, document 2122, every request carrying
+`Accept: application/problem+json` so rejections arrive as RFC 7807 rather than the legacy
+500 (D10, Connect-API-Code#122).
+
+| Probe | Result |
+|---|---|
+| submitter creates | 200 — `status=OPEN`, `respondBy` = create + 24h, `testCase=true` |
+| **receiver posts a note on the OPEN case** | **200** |
+| submitter closes the OPEN case | **422** `"OPEN cases cannot be closed."` |
+| **receiver** closes the OPEN case | **422**, same detail |
+| status after both refusals | `OPEN` — the refusals were inert |
+
+The submitter half was already pinned by the harness (`connect-test-harness`
+`lifecycle-transitions.feature`, which records that an earlier version asserting a 2xx close
+on a fresh case "can never pass"). **The receiver half is new: the refusal is a status rule,
+not a role rule.** No party can close from OPEN, so there is no back door and ACCEPTED is
+mandatory before any close.
+
+### What it settles
+
+The legal shape is:
+
+```
+OPEN -> [notes, either direction] -> ACCEPTED -> CLOSED
+```
+
+Answering requires **no state transition at all**, so the entire answering phase — Fin's whole
+job — can live on a conversation with nothing written back to Connect but a note. But a case
+cannot be retired from OPEN, so every case that ends cleanly passes through ACCEPTED.
+
+**Therefore ticket promotion must not hang off ACCEPTED.** An earlier draft of this design
+proposed promoting the conversation to a ticket at acceptance, reasoning that acceptance is the
+commitment point. Given the rule above, that would put a ticket on *every* case that terminates
+cleanly — precisely the outcome the conversation-first shape exists to avoid. Promotion belongs
+on **human engagement**, the moment work needs an owner or a queue, which is orthogonal to the
+Connect lifecycle. Recorded as a **local, provisional** direction: it is not estate policy and
+it is not built.
+
+### What has to change first, and it is not the ticket-create call
+
+Four sites judge "this case has landed" by `ticketAnchored()`, which is only
+`ticket_id != null` (`SubmissionLink`):
+
+- `ReconciliationPoller` (three sites) reads an unanchored link as IN FLIGHT and **holds the
+  cursor**. A conversation-landed case would wedge the cursor on every inbound case rather than
+  on the rare crash D16 describes, emitting `reconcile_cycle_held` forever while
+  `consecutiveFailures` sits at 0, so nothing alerts.
+- `InboundClosureHandler` and `PartnerResponseHandler` both decline outright.
+
+The asymmetry that makes this a defect rather than a clean extension: the *release* guard is
+already conversation-aware (`ticket_id IS NULL AND conversation_id IS NULL`, and
+`ticketAnchored() || conversationId() != null` in the map store) while the *success* predicate
+is not. Anchoring has to mean "has a platform object", with the kind recorded, and `anchor()`
+is write-once by design so promotion is a deliberate second transition rather than a mutation.
+
+The conversation write surface itself is not the obstacle: `postConversationNote` landed with
+the ticketless-verdict slice (D22), so a note can already reach a plain conversation.
+
+### Incidental findings from the same run, each of which changes something
+
+- **The escalation body is not in the note timeline.** `caseNotes[0]` is auto-generated —
+  `summary: "Case Created"`, `description: ""`. The problem text lives on the case object's
+  `summary` / `description` / `customFields`. So the read side ingests the **case object**, not
+  the note stream, and the note stream is purely the ongoing conversation. Simpler than assumed.
+- **`caseNotes` and `caseResponses` are separate top-level collections.** Conversation content
+  and state verdicts are cleanly split, which maps onto conversation parts versus Connect
+  actions almost directly.
+- **`receiverCaseNumber` is distinct from `submitterCaseNumber`.** That is the slot D15's
+  accept-refusal is actually guarding — the receiver's own reference, supplied at approval.
+  Whether a conversation-anchored case can put something honest there, rather than refusing for
+  want of a searchable ticket number, is worth re-opening against D15.
+- **Note attribution was fully populated** (`companyName`, `creatorEmail`, `creatorName`) and
+  correctly distinguished both parties. This does **not** overturn the estate's note-direction
+  problem (`Member-Integrations#39`): that failure mode is a connector posting under a shared
+  synchronization user, and this probe authenticated as two distinct real accounts. Whether the
+  per-member client pairing (D9) preserves honest attribution is **unprobed**, and is now worth
+  probing rather than assuming in either direction.
+  **Followed up the same day** with a second probe (one real note from each side, timeline read
+  from both identities): the note object is NOT reader-relative, `direction` on the CASE is, and
+  the case carries both company names — so `ownCompany = (direction == INBOUND) ? receiveCompanyName
+  : submitCompanyName` and a note is ours iff `note.companyName == ownCompany`. Direction is
+  therefore derivable today without a new field. Two caveats, both recorded on the estate issue:
+  the join is a string match on a display name (`CaseNoteDTO` carries no `companyId` while the case
+  carries both company ids), and the third-party-synchronization-user case was not reproduced.
+  Evidence and the argument that `companyId` is the smaller platform ask than a direction field are
+  on `Member-Integrations#39`.
+
+### Open, and deliberately not decided here
+
+- **Is ACCEPTED-as-bookkeeping honest across connectors?** If Anthropic accepts purely to make an
+  answered case closable, Microsoft's Salesforce UI still badges it "Accepted", which their
+  engineer may read as "an engineer has been assigned". Two connectors disagreeing about what a
+  state *means* is the divergence class the estate's unconverged list exists to prevent. Raise on
+  `Member-Integrations`; do not answer locally.
+- **SLA authority** (unconverged): `respondBy` is create + 24h, and Fin consumes it before any
+  human sees the case.
+- **Not probed:** whether REJECTED-after-notes behaves differently, what the SLA sweep does to a
+  case still OPEN at `respondBy`, and what Microsoft's record renders for each terminal state.
+  The last decides whether answer-then-accept-then-close *looks* right to the partner, and is the
+  natural next probe.
+
+**Residue:** two BETA cases, both left OPEN with `testCase=true` and neither deletable via the
+API (harness issue #21) — `925704566d4141b5af` (`PROBE-NOACCEPT-*`, the lifecycle probe) and
+`138b35fecb194a20a1` (`PROBE-ATTRIB-*`, the attribution follow-up). Both values are **case
+handles, not credentials**: they are the `token` field of a collaboration request, used as the
+path segment on `/v1/collaboration-requests/{token}`, and an unauthenticated GET against either
+the case or its notes returns 401. Notes carry their own `token` on the same pattern.
