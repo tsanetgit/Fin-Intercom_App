@@ -297,19 +297,75 @@ class PartnerResponseHandlerTest {
         assertEquals(0, intercom.noteCalls());
     }
 
+    /** An outbound submit from a plain Inbox conversation: no ticket, so no state move. */
+    private void ticketlessLink(String token, String conversationId) {
+        links.record(new SubmissionLink(token, "out:" + token, "nxdyoagx", conversationId,
+                null, PARTNER, null, true, "agent@example.com", Instant.now()));
+    }
+
     @Test
-    void aTicketlessLinkIsSkippedNotSurfaced() {
-        // An outbound submit from a plain Inbox conversation has no ticket to move —
-        // the KNOWN partial coverage named on #45, pinned here so widening it is a
-        // deliberate act rather than drift.
-        links.record(new SubmissionLink(TOKEN, "out:" + TOKEN, "nxdyoagx", "conv-1",
+    void aTicketlessLinkSurfacesTheVerdictAsAConversationNote() {
+        // #50: this used to skip with a WARN, which left the audit log as the only trace
+        // a partner response on such a case got.
+        ticketlessLink(TOKEN, "conv-1");
+        fetchAnswers(TOKEN, InboundCase.Status.ACCEPTED);
+
+        handler().handle(responseCreated(TOKEN));
+
+        assertEquals(0, intercom.stateMoveCalls(),
+                "a conversation has no ticket state — the move is not deferred, it does not apply");
+        assertEquals(1, intercom.noteCalls());
+        assertEquals("conv-1|" + PARTNER + " accepted the TSANet case.", intercom.notes().get(0),
+                "the note lands on the conversation, with the same verdict text a ticket gets");
+        assertEquals("ACCEPTED", links.surfacedStatus(TOKEN),
+                "the dedup record is what stops a redelivery duplicating the note");
+    }
+
+    @Test
+    void aTicketlessBurstSurfacesTheVerdictExactlyOnce() {
+        // The dedup record is the ONLY thing standing between the live burst shape (five
+        // status-bearing events in one second) and five identical conversation notes.
+        // The ticket path proves this separately; a ticketless path that recorded nothing
+        // would still pass every other test here.
+        ticketlessLink(TOKEN, "conv-1");
+        fetchAnswers(TOKEN, InboundCase.Status.ACCEPTED);
+
+        PartnerResponseHandler handler = handler();
+        handler.handle(responseCreated(TOKEN));
+        handler.handle(responseUpdated(TOKEN));
+        handler.handle(responseUpdated(TOKEN));
+
+        assertEquals(1, intercom.noteCalls(), "one verdict, one note: " + intercom.notes());
+    }
+
+    @Test
+    void aTicketlessLinkSurfacesEvenWithNoStateIdsConfigured() {
+        // The unconfigured-id refusal guards a write this path never makes. Demanding it
+        // here would withhold the one write a ticketless link CAN make, which is the
+        // whole surface rather than half of it.
+        ticketlessLink(TOKEN, "conv-1");
+        fetchAnswers(TOKEN, InboundCase.Status.ACCEPTED);
+
+        new PartnerResponseHandler(tsanet, intercom, links,
+                InboundProperties.ofStateIds("4561712", null, null, null))
+                .handle(responseCreated(TOKEN));
+
+        assertEquals(1, intercom.noteCalls());
+        assertEquals("ACCEPTED", links.surfacedStatus(TOKEN));
+    }
+
+    @Test
+    void aLinkWithNeitherAnchorIsRefused() {
+        // Nothing to write on. Distinct from the ticketless case, which has a
+        // conversation: this one would have posted to a null id.
+        links.record(new SubmissionLink(TOKEN, "out:" + TOKEN, "nxdyoagx", null,
                 null, PARTNER, null, true, "agent@example.com", Instant.now()));
         fetchAnswers(TOKEN, InboundCase.Status.ACCEPTED);
 
         handler().handle(responseCreated(TOKEN));
 
-        assertEquals(0, intercom.stateMoveCalls());
         assertEquals(0, intercom.noteCalls());
+        assertEquals(0, intercom.stateMoveCalls());
         assertNull(links.surfacedStatus(TOKEN));
     }
 

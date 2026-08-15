@@ -996,10 +996,24 @@ is lost.
 echo of our own panel action; a "Partner accepted" note would be false); CLOSED
 (`REQUEST_CLOSED` is closure's event, D18 owns it); OPEN (a raced fetch with no
 verdict — nothing recorded, so the next delivery retries); PENDINGACTION/UNKNOWN
-(unmapped per D17, nothing recorded); ticketless links (an outbound submit from a
-plain Inbox conversation has no ticket state to move — the conversation-note-only
-surface is the named follow-up on #45). The handler never writes `CaseState`: that
+(unmapped per D17, nothing recorded). The handler never writes `CaseState`: that
 field is OUR response to an inbound case and other flows guard on it.
+
+**Ticketless links surface the note alone** (#50; they were refused outright until
+then). An outbound submit from a plain Inbox conversation is never anchored to a
+ticket, and a conversation has no ticket state — so the state write is not deferred
+there, it does not apply, and the note is the entire surface rather than the second of
+two writes. `postConversationNote` is the seam; `annotate()` had already been writing
+to `/conversations/{id}/reply` since the first slice, so this made an existing
+capability reachable with caller-supplied text rather than adding one.
+
+The two paths share every rule that decides WHETHER to surface — the re-fetch, the
+direction and status refusals, and the dedup record — and differ only on WHERE. The
+one asymmetry is deliberate: the unconfigured-state-id refusal applies to anchored
+links only, because demanding a state id from a path that never moves a state would
+withhold the one write it can make. The dedup record matters as much here as on the
+ticket path: without it the live burst shape (five status-bearing events in one
+second) posts five identical conversation notes, and no other guard would catch it.
 
 **Non-terminal state writes verify by id, not by the open flag.** The closure-era
 read-back asserts `open=false`, which is vacuous for In progress / Waiting on

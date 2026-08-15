@@ -113,6 +113,19 @@ public interface IntercomGateway {
      */
     void postTicketNote(String ticketId, String text);
 
+    /**
+     * The same admin note on a CONVERSATION, for links that were never anchored to a
+     * ticket — an outbound submit from a plain Inbox conversation. Identical contract
+     * to {@link #postTicketNote}: plain text in, implementations own the markup, and
+     * {@link IntercomException} on reported failure with no silent-200 detection.
+     *
+     * <p>Exists because a conversation has no ticket state to move, so the note is the
+     * ENTIRE surface a partner verdict gets on such a link rather than the second of
+     * two writes (#50). {@link #annotate} already writes to conversations this way; this
+     * method is that capability made reachable with caller-supplied text.
+     */
+    void postConversationNote(String conversationId, String text);
+
     /** Cheap credential/reachability probe (GET /me). */
     boolean healthy();
 

@@ -223,6 +223,30 @@ class RestIntercomGatewayTest {
     }
 
     @Test
+    void aConversationNotePostsTheSameShapeOnTheConversationPath() {
+        // #50: the ticketless verdict surface. Same reply-part body as the ticket note —
+        // only the path differs — so this pins that the path is the ONLY difference and a
+        // future divergence in one is caught rather than assumed.
+        server.expect(requestTo(BASE + "/conversations/conv-1/reply")).andExpect(method(HttpMethod.POST))
+                .andExpect(content().json("{\"message_type\":\"note\",\"type\":\"admin\","
+                        + "\"admin_id\":\"admin-1\","
+                        + "\"body\":\"<p>Partner &amp; Co accepted the TSANet case.</p>\"}"))
+                .andRespond(withSuccess("{\"id\":\"part-2\",\"part_type\":\"note\"}",
+                        MediaType.APPLICATION_JSON));
+        gateway.postConversationNote("conv-1", "Partner & Co accepted the TSANet case.");
+        server.verify();
+    }
+
+    @Test
+    void aConversationNoteWithNoIdFailsBeforeReachingTheWire() {
+        // No server expectation set: a call that escaped would fail the MockRestServiceServer.
+        assertThrows(IntercomException.class,
+                () -> gateway.postConversationNote("  ", "a verdict"));
+        assertThrows(IntercomException.class,
+                () -> gateway.postConversationNote("conv-1", "  "));
+    }
+
+    @Test
     void stateMoveReadBackFailureIsAFailureNotSuccess() {
         server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
