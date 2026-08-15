@@ -207,6 +207,21 @@ public class CanvasController {
                             + " case can be submitted via the TSANet web app."),
                     CanvasKit.button("back_home", "Start over")), pointer(state));
         }
+        // Detected and logged, NOT refused (#49). Canvas Kit bounds a select at 2..11
+        // options; what Intercom does past that is not yet observed, so refusing here
+        // could break a partner form that renders fine today. This line is the signal
+        // that tells us whether any real partner form is out of range at all — the
+        // question the render probe has to answer before this can become a refusal.
+        List<FormField> outOfRange = form.optionBoundViolations();
+        if (!outOfRange.isEmpty()) {
+            String detail = outOfRange.stream()
+                    .map(f -> f.label() + "[" + f.optionCount() + "]")
+                    .collect(Collectors.joining(", "));
+            log.warn("tsanet_audit event=form_option_bound_exceeded partner={} fields={}"
+                    + " bound={}..{} action=rendered_anyway",
+                    partner.display(), detail,
+                    FormField.MIN_SELECT_OPTIONS, FormField.MAX_SELECT_OPTIONS);
+        }
         synchronized (state) {
             PartnerHit previous = state.partner();
             if (previous == null || !sameTarget(previous, partner)) {
