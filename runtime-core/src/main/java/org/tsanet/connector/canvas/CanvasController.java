@@ -258,7 +258,7 @@ public class CanvasController {
             String id = "f_" + field.fieldId();
             String label = field.label() + (field.required() ? " (required)" : "");
             if (field.selectShaped()) {
-                components.add(CanvasKit.singleSelect(id, label, field.options(), state.values().get(id)));
+                components.add(CanvasKit.dropdown(id, label, field.options(), state.values().get(id)));
             } else if (field.textareaShaped()) {
                 components.add(CanvasKit.textarea(id, label, null, state.values().get(id)));
             } else {

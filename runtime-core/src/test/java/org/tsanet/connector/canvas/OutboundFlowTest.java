@@ -7,7 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
@@ -77,14 +79,22 @@ class OutboundFlowTest {
         return canvas.at("/canvas/stored_data/flow_id").asText();
     }
 
-    private static String componentValue(JsonNode canvas, String id) {
+    private static JsonNode component(JsonNode canvas, String id) {
         for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
             JsonNode component = it.next();
             if (component.has("id") && id.equals(component.get("id").asText())) {
-                return component.has("value") ? component.get("value").asText() : null;
+                return component;
             }
         }
         return null;
+    }
+
+    private static String componentValue(JsonNode canvas, String id) {
+        JsonNode component = component(canvas, id);
+        if (component == null) {
+            return null;
+        }
+        return component.has("value") ? component.get("value").asText() : null;
     }
 
     private static String allText(JsonNode canvas) {
@@ -99,6 +109,39 @@ class OutboundFlowTest {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * #7: select-shaped fields render as a dropdown, because a single-select laid its
+     * options out in one horizontal row that neither wrapped nor scaled — option-heavy
+     * partner forms clipped every label to a few characters at the default panel width.
+     *
+     * <p>Asserts the option TEXT survives whole, not just the option count: the canvas
+     * JSON always carried the full labels (the truncation was Intercom's renderer, never
+     * data loss), so a test that only counted options would have passed throughout the
+     * defect and would pass again if the component silently reverted.
+     */
+    @Test
+    void selectShapedFieldsRenderAsDropdownWithEveryOptionLabelIntact() throws Exception {
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        JsonNode form = submit(flow, "select:1042|512", "{}");
+
+        JsonNode severity = component(form, "f_89");
+        assertNotNull(severity, "the partner form's SELECT field must render");
+        assertEquals("dropdown", severity.path("type").asText(),
+                "single-select truncates option labels at the default panel width (#7)");
+
+        List<String> optionTexts = new ArrayList<>();
+        List<String> optionIds = new ArrayList<>();
+        for (Iterator<JsonNode> it = severity.path("options").elements(); it.hasNext(); ) {
+            JsonNode option = it.next();
+            optionTexts.add(option.path("text").asText());
+            optionIds.add(option.path("id").asText());
+        }
+        assertEquals(List.of("High", "Medium", "Low"), optionTexts);
+        // The id is what comes back in input_values, so the submit contract is unchanged.
+        assertEquals(List.of("High", "Medium", "Low"), optionIds);
     }
 
     @Test

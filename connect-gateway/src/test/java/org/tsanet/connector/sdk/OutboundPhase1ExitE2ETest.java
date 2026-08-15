@@ -188,7 +188,7 @@ class OutboundPhase1ExitE2ETest {
                 continue;
             }
             String value;
-            if ("single-select".equals(component.path("type").asText())) {
+            if ("dropdown".equals(component.path("type").asText())) {
                 value = component.at("/options/0/id").asText("");
             } else if (label.toLowerCase().contains("email")) {
                 value = "e2e-customer@example.com";

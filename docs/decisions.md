@@ -147,16 +147,27 @@ construction.
 The canvas flow was built against a failure-injectable FakeTsanetGateway whose
 fixtures mirror the Connect API contract, with an abstract gateway contract test that
 the SDK-backed gateway must also pass in slice 2; the fake refuses to start under the
-prod profile. Component shapes for input/textarea/single-select follow the Canvas Kit
-reference. All three were verified on a live workspace render 2026-08-05/06:
+prod profile. Component shapes for input/textarea/dropdown follow the Canvas Kit
+reference. They were verified on a live workspace render 2026-08-05/06:
 Microsoft | Standard rendered input and textarea fields, Dell | Global Support
-rendered all 4 single-selects, and `input_values` was observed on the wire
+rendered all 4 select fields, and `input_values` was observed on the wire
 (`{"q": "microsoft"}` on the search submit). The same check settled the formatting
 question: canvas text renders markdown links and bold only, never HTML. Partner
 notes arrive as partner-authored HTML and are converted to canvas markdown at the
 presentation boundary (#6), with literal and entity-encoded link syntax neutralized
-so generated links are the only live link syntax. Known rendering caveat: #7
-(single-select option labels truncate at default panel width on option-heavy forms).
+so generated links are the only live link syntax.
+
+That render used `single-select` for select-shaped fields, and is what surfaced #7:
+single-select lays its options out as one horizontal row that neither wraps nor
+scales to the panel, so Dell's 8- and 11-option fields clipped every label to a few
+characters ("Compelle...", "Break...") and the agent could not read the choices
+before picking one. The data was never lost — the canvas JSON carried full option ids
+and labels on the wire — so the fix is the component, not the payload: select-shaped
+fields now emit `dropdown`, which collapses the options into a menu with no
+per-option horizontal budget. Option structure and the `input_values` contract are
+identical, so nothing downstream of the submit changed. **The dropdown render is the
+one component shape not yet confirmed on a live workspace**; the D8 rule stands and
+this one still owes its render check.
 
 ## D9. SDK gateway: generated client, per-member pairing, bounded and sanitized
 > Since the Fin swap (#42): this implementation lives in the published
