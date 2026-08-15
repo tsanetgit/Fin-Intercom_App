@@ -1117,6 +1117,15 @@ the ticketless-verdict slice (D22), so a note can already reach a plain conversa
   synchronization user, and this probe authenticated as two distinct real accounts. Whether the
   per-member client pairing (D9) preserves honest attribution is **unprobed**, and is now worth
   probing rather than assuming in either direction.
+  **Followed up the same day** with a second probe (one real note from each side, timeline read
+  from both identities): the note object is NOT reader-relative, `direction` on the CASE is, and
+  the case carries both company names — so `ownCompany = (direction == INBOUND) ? receiveCompanyName
+  : submitCompanyName` and a note is ours iff `note.companyName == ownCompany`. Direction is
+  therefore derivable today without a new field. Two caveats, both recorded on the estate issue:
+  the join is a string match on a display name (`CaseNoteDTO` carries no `companyId` while the case
+  carries both company ids), and the third-party-synchronization-user case was not reproduced.
+  Evidence and the argument that `companyId` is the smaller platform ask than a direction field are
+  on `Member-Integrations#39`.
 
 ### Open, and deliberately not decided here
 
@@ -1132,5 +1141,9 @@ the ticketless-verdict slice (D22), so a note can already reach a plain conversa
   The last decides whether answer-then-accept-then-close *looks* right to the partner, and is the
   natural next probe.
 
-**Residue:** BETA token `925704566d4141b5af` is left OPEN with `testCase=true`; the API cannot
-delete it (harness issue #21).
+**Residue:** two BETA cases, both left OPEN with `testCase=true` and neither deletable via the
+API (harness issue #21) — `925704566d4141b5af` (`PROBE-NOACCEPT-*`, the lifecycle probe) and
+`138b35fecb194a20a1` (`PROBE-ATTRIB-*`, the attribution follow-up). Both values are **case
+handles, not credentials**: they are the `token` field of a collaboration request, used as the
+path segment on `/v1/collaboration-requests/{token}`, and an unauthenticated GET against either
+the case or its notes returns 401. Notes carry their own `token` on the same pattern.
