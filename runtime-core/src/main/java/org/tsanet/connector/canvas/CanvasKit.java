@@ -8,7 +8,7 @@ import java.util.Map;
 /**
  * Minimal builders for Canvas Kit response JSON. Kept as maps on purpose: the canvas
  * vocabulary is Intercom's, evolves server-side, and the connector only ever writes it.
- * Input/textarea/single-select shapes follow the Canvas Kit reference; their exact
+ * Input/textarea/dropdown shapes follow the Canvas Kit reference; their exact
  * accepted attributes get re-verified against a live workspace render (D8).
  */
 public final class CanvasKit {
@@ -74,13 +74,25 @@ public final class CanvasKit {
         return component;
     }
 
-    public static Map<String, Object> singleSelect(String id, String label, List<String> options, String selected) {
+    /**
+     * Select-shaped fields render as a dropdown, NOT a single-select. A single-select lays
+     * its options out as one horizontal row that neither wraps nor scales to the panel, so
+     * past about three options every label clips to a few characters and the agent cannot
+     * read the choices before picking one — observed live on Dell | Global Support, whose
+     * 11-option Escalation Type rendered as "Compelle...", "Break...", "Comp..." (#7). A
+     * dropdown collapses the same options into a menu with no per-option horizontal budget.
+     *
+     * <p>The option structure and the {@code input_values} contract are identical between
+     * the two components, so the chosen option id still comes back under this component's
+     * id and no caller of the submitted values changes.
+     */
+    public static Map<String, Object> dropdown(String id, String label, List<String> options, String selected) {
         List<Map<String, Object>> optionComponents = new ArrayList<>();
         for (String option : options) {
             optionComponents.add(Map.of("type", "option", "id", option, "text", option));
         }
         Map<String, Object> component = new LinkedHashMap<>();
-        component.put("type", "single-select");
+        component.put("type", "dropdown");
         component.put("id", id);
         component.put("label", label);
         component.put("options", optionComponents);

@@ -13,7 +13,8 @@ import java.util.Set;
  * exit E2E: sdk2's form carries required EMAIL and PHONE fields the original
  * STRING/SELECT set rejected): the text-shaped types render as single-line inputs and
  * the Connect API remains the format validator; TEXT renders as a textarea; SELECT as
- * a single-select; HIDDEN is supported but never rendered — it rides the re-fetched
+ * a dropdown (#7, which a single-select truncated); HIDDEN is supported but never
+ * rendered — it rides the re-fetched
  * form template with its server-side value untouched.
  */
 public record FormField(String fieldId, String label, String type, boolean required, String section,
