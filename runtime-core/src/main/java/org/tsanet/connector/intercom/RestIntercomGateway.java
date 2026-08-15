@@ -188,8 +188,26 @@ public class RestIntercomGateway implements IntercomGateway {
         if (ticketId == null || ticketId.isBlank() || text == null || text.isBlank()) {
             throw new IntercomException("postTicketNote needs a ticket id and a non-blank note");
         }
+        postAdminNote("/tickets/" + ticketId + "/reply", text);
+    }
+
+    @Override
+    public void postConversationNote(String conversationId, String text) {
+        if (conversationId == null || conversationId.isBlank() || text == null || text.isBlank()) {
+            throw new IntercomException(
+                    "postConversationNote needs a conversation id and a non-blank note");
+        }
+        postAdminNote("/conversations/" + conversationId + "/reply", text);
+    }
+
+    /**
+     * The reply-part body is identical on both surfaces — {@code annotate()} has posted
+     * the same shape to {@code /conversations/{id}/reply} since the first slice — so the
+     * only thing that differs between a ticket note and a conversation note is the path.
+     */
+    private void postAdminNote(String path, String text) {
         try {
-            http.postForObject(baseUrl + "/tickets/" + ticketId + "/reply", Map.of(
+            http.postForObject(baseUrl + path, Map.of(
                     "message_type", "note",
                     "type", "admin",
                     "admin_id", adminId,

@@ -137,17 +137,30 @@ public class FakeIntercomGateway implements IntercomGateway {
 
     @Override
     public void postTicketNote(String ticketId, String text) {
+        recordNote(ticketId, text, "postTicketNote needs a ticket id and a non-blank note");
+    }
+
+    @Override
+    public void postConversationNote(String conversationId, String text) {
+        // Same counter and same note list as the ticket note, the way moveOpenTicketState
+        // shares moveTicketState's: handler tests probe "did a note post at all", and the
+        // anchor id already distinguishes which surface carried it.
+        recordNote(conversationId, text,
+                "postConversationNote needs a conversation id and a non-blank note");
+    }
+
+    private void recordNote(String anchorId, String text, String invalidMessage) {
         // Counted BEFORE validation, mirroring moveTicketState: a caller that should
         // not have called at all is distinguishable from one that called badly.
         noteCalls.incrementAndGet();
-        if (ticketId == null || ticketId.isBlank() || text == null || text.isBlank()) {
-            throw new IntercomException("postTicketNote needs a ticket id and a non-blank note");
+        if (anchorId == null || anchorId.isBlank() || text == null || text.isBlank()) {
+            throw new IntercomException(invalidMessage);
         }
         if (failNextNote) {
             failNextNote = false;
             throw new IntercomException("injected note failure");
         }
-        notesByTicket.add(ticketId + "|" + text);
+        notesByTicket.add(anchorId + "|" + text);
     }
 
     /** How many note posts were ATTEMPTED, valid or not — the never-called probe. */

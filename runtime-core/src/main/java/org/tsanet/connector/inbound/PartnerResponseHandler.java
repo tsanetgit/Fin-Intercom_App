@@ -22,6 +22,16 @@ import org.tsanet.connector.webhooks.TsanetCloudEvent;
  * ({@code tsanetgit/Fin-Intercom_App#45}). Surfacing is two writes: the ticket state
  * moves per the D17 mapping, and an admin note names the verdict.
  *
+ * <p><b>Ticketless links get the note alone</b> ({@code tsanetgit/Fin-Intercom_App#50}).
+ * An outbound submit from a plain Inbox conversation is never anchored to a ticket, and
+ * a conversation has no ticket state, so the state write is not deferred there — it does
+ * not apply. Every other guard is shared, deliberately: such a link is re-fetched,
+ * direction- and status-checked, and deduped exactly like an anchored one, so the two
+ * paths cannot drift on the rules that decide WHETHER to surface. They differ only on
+ * WHERE. State-id configuration is likewise demanded only of the anchored path, since
+ * refusing a ticketless link for a missing state id would withhold the one write it can
+ * make.
+ *
  * <p><b>The fetched status is the truth, not the event</b> (D3). The event body is
  * unread beyond the token: the case is re-fetched and the surface keys entirely on
  * what the fetch says, so a stale or reordered delivery cannot surface a verdict the
@@ -96,15 +106,16 @@ public class PartnerResponseHandler implements InboundEventHandler {
             return;
         }
         SubmissionLink link = found.get();
-        if (!link.ticketAnchored()) {
-            // KNOWN partial coverage, not an anomaly: an outbound submit from a plain
-            // Inbox conversation produces a ticketless link (the same shape annotate()
-            // serves via its conversation-reply branch), and a ticket state cannot
-            // move on a conversation. Surfacing a conversation-note-only verdict is
-            // the named follow-up on tsanetgit/Fin-Intercom_App#45 — until then this
-            // line is the only trace a response on such a case gets.
-            log.warn("tsanet_audit event=response_no_ticket token={} conversation={}",
-                    token, link.conversationId());
+        // A submit from a plain Inbox conversation is never anchored to a ticket. Such a
+        // link takes EVERY guard below unchanged — the fetch, the direction and status
+        // refusals, the dedup record — and diverges only at the platform write, because a
+        // conversation has no ticket state to move (#50). The note is therefore not the
+        // second of two writes but the entire surface.
+        boolean anchored = link.ticketAnchored();
+        String anchor = anchored ? "ticket=" + link.ticketId() : "conversation=" + link.conversationId();
+        if (!anchored && (link.conversationId() == null || link.conversationId().isBlank())) {
+            // Neither anchor. Nothing to write on, and no id to name in the audit line.
+            log.error("tsanet_audit event=response_no_anchor token={}", token);
             return;
         }
 
@@ -157,49 +168,60 @@ public class PartnerResponseHandler implements InboundEventHandler {
             return;
         }
 
-        String stateId = switch (status) {
-            case ACCEPTED -> properties.inProgressStateId();
-            case INFORMATION -> properties.waitingStateId();
-            case REJECTED -> properties.resolvedStateId();
-            default -> null;   // unreachable: earlier switch returned on every other member
-        };
-        if (stateId == null || stateId.isBlank()) {
-            // Per-status refusal: state ids are PER-WORKSPACE (D17) and a guessed id
-            // may name some other state that happens to exist. ALERTABLE: each
-            // response arriving while its id is unconfigured surfaces nothing, and
-            // only a redelivery or a later transition retries it.
-            log.error("tsanet_audit event=response_unconfigured token={} status={} reason=no_state_id",
-                    token, status);
-            return;
+        // Resolved and demanded ONLY for anchored links. A ticketless link has no state
+        // to move, so refusing it for a missing state id would withhold the one write it
+        // can actually make.
+        String stateId = null;
+        if (anchored) {
+            stateId = switch (status) {
+                case ACCEPTED -> properties.inProgressStateId();
+                case INFORMATION -> properties.waitingStateId();
+                case REJECTED -> properties.resolvedStateId();
+                default -> null;   // unreachable: earlier switch returned on every other member
+            };
+            if (stateId == null || stateId.isBlank()) {
+                // Per-status refusal: state ids are PER-WORKSPACE (D17) and a guessed id
+                // may name some other state that happens to exist. ALERTABLE: each
+                // response arriving while its id is unconfigured surfaces nothing, and
+                // only a redelivery or a later transition retries it.
+                log.error("tsanet_audit event=response_unconfigured token={} status={} reason=no_state_id",
+                        token, status);
+                return;
+            }
+
+            try {
+                // REJECTED targets a terminal state and uses the open-flag-verified move;
+                // ACCEPTED/INFORMATION target open states, whose verification compares the
+                // read-back ticket_state.id (vacuous open-flag check otherwise).
+                if (status == InboundCase.Status.REJECTED) {
+                    intercom.moveTicketState(link.ticketId(), stateId);
+                } else {
+                    intercom.moveOpenTicketState(link.ticketId(), stateId);
+                }
+            } catch (RuntimeException e) {
+                // Loud and not recorded: a redelivery re-runs the whole surface, and the
+                // state re-move is idempotent (same target). ALERTABLE with no duplicate
+                // in flight, same one-shot-loss property as closure (D18).
+                log.error("tsanet_audit event=response_ticket_move_failed token={} ticket={} reason={}",
+                        token, link.ticketId(), e.getMessage());
+                return;
+            }
         }
 
         try {
-            // REJECTED targets a terminal state and uses the open-flag-verified move;
-            // ACCEPTED/INFORMATION target open states, whose verification compares the
-            // read-back ticket_state.id (vacuous open-flag check otherwise).
-            if (status == InboundCase.Status.REJECTED) {
-                intercom.moveTicketState(link.ticketId(), stateId);
+            if (anchored) {
+                intercom.postTicketNote(link.ticketId(), noteText(link, status));
             } else {
-                intercom.moveOpenTicketState(link.ticketId(), stateId);
+                intercom.postConversationNote(link.conversationId(), noteText(link, status));
             }
         } catch (RuntimeException e) {
-            // Loud and not recorded: a redelivery re-runs the whole surface, and the
-            // state re-move is idempotent (same target). ALERTABLE with no duplicate
-            // in flight, same one-shot-loss property as closure (D18).
-            log.error("tsanet_audit event=response_ticket_move_failed token={} ticket={} reason={}",
-                    token, link.ticketId(), e.getMessage());
-            return;
-        }
-
-        try {
-            intercom.postTicketNote(link.ticketId(), noteText(link, status));
-        } catch (RuntimeException e) {
-            // The state moved but the verdict note did not land, and nothing is
-            // recorded — so a redelivery retries both. The state re-move targets the
-            // same id and re-verifies clean; the note is the write actually retried.
-            log.error("tsanet_audit event=response_note_failed token={} ticket={} reason={}"
-                    + " consequence=redelivery_retries_state_and_note",
-                    token, link.ticketId(), e.getMessage());
+            // Nothing recorded, so a redelivery retries. On an anchored link the state
+            // moved first and its re-move targets the same id and re-verifies clean, so
+            // the note is the write actually retried; on a ticketless link the note was
+            // the only write, and the retry is the whole surface.
+            log.error("tsanet_audit event=response_note_failed token={} {} reason={}"
+                    + " consequence=redelivery_retries_the_surface",
+                    token, anchor, e.getMessage());
             return;
         }
 
@@ -211,15 +233,18 @@ public class PartnerResponseHandler implements InboundEventHandler {
             // re-runs the surface and the note posts twice. Loud, because every other
             // failure branch here is - and this is the only one that duplicates a
             // partner-visible-adjacent write instead of losing one.
-            log.error("tsanet_audit event=response_record_failed token={} ticket={} reason={}"
+            log.error("tsanet_audit event=response_record_failed token={} {} reason={}"
                     + " consequence=duplicate_note_on_redelivery",
-                    token, link.ticketId(), e.getMessage());
+                    token, anchor, e.getMessage());
             return;
         }
         // state_id on the line so a misconfigured-but-real id is visible in the audit
-        // stream, mirroring closure_applied (#27 auto-QA).
-        log.info("tsanet_audit event=response_surfaced token={} ticket={} partner={} status={}"
-                + " state_id={}", token, link.ticketId(), link.partnerDisplay(), status, stateId);
+        // stream, mirroring closure_applied (#27 auto-QA). ONE event name across both
+        // surfaces, with state_id=none for the ticketless one: a verdict surfaced either
+        // way, and counting surfaces should not need two queries.
+        log.info("tsanet_audit event=response_surfaced token={} {} partner={} status={}"
+                + " state_id={}", token, anchor, link.partnerDisplay(), status,
+                stateId == null ? "none" : stateId);
     }
 
     private static String noteText(SubmissionLink link, InboundCase.Status status) {
