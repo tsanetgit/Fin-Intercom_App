@@ -22,6 +22,10 @@ public record FormField(String fieldId, String label, String type, boolean requi
 
     private static final Set<String> TEXT_INPUT_TYPES = Set.of("STRING", "EMAIL", "PHONE", "INTEGER", "URL");
 
+    /** Canvas Kit's select-component bound, identical on dropdown and single-select. */
+    public static final int MIN_SELECT_OPTIONS = 2;
+    public static final int MAX_SELECT_OPTIONS = 11;
+
     public boolean supported() {
         return type != null && (TEXT_INPUT_TYPES.contains(normalized())
                 || "SELECT".equals(normalized())
@@ -36,6 +40,29 @@ public record FormField(String fieldId, String label, String type, boolean requi
 
     public boolean selectShaped() {
         return "SELECT".equals(normalized());
+    }
+
+    /**
+     * Canvas Kit allows a select component a minimum of 2 options and a maximum of 11 —
+     * the same bound on both {@code dropdown} and {@code single-select}, checked against
+     * the reference for each. The options are the PARTNER's, editable without telling us,
+     * and Dell | Global Support's Escalation Type already sits at exactly 11.
+     *
+     * <p>Detection only, deliberately: what Intercom does when the bound is violated —
+     * reject the whole canvas, drop the component, or render it anyway — is not yet
+     * observed, and refusing a form Intercom would have rendered fine would break a
+     * working partner (#49). The render path logs this and renders on.
+     */
+    public boolean optionCountOutOfRange() {
+        if (!selectShaped()) {
+            return false;
+        }
+        int count = options == null ? 0 : options.size();
+        return count < MIN_SELECT_OPTIONS || count > MAX_SELECT_OPTIONS;
+    }
+
+    public int optionCount() {
+        return options == null ? 0 : options.size();
     }
 
     public boolean textareaShaped() {

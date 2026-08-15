@@ -169,6 +169,23 @@ identical, so nothing downstream of the submit changed. **The dropdown render is
 one component shape not yet confirmed on a live workspace**; the D8 rule stands and
 this one still owes its render check.
 
+**The 2..11 option bound is detected, not enforced** (#49). Canvas Kit allows a select
+component a minimum of 2 options and a maximum of 11 — identical on `dropdown` and
+`single-select`, checked against the reference for each — and the connector renders
+the partner's options verbatim. Dell's Escalation Type sits at exactly 11, so one
+option added by that partner puts a live form out of range, and the options are theirs
+to change without telling us.
+
+What Intercom does past the bound is **not observed**: it could reject the whole
+canvas, drop the component, or render it anyway. That gap is why this is detection
+only. A refusal built on the documented bound would break a partner form that renders
+fine today, which is a worse failure than the one it prevents — so the render path
+logs `form_option_bound_exceeded` naming the fields and their counts, and renders on.
+The audit line doubles as the measurement: it answers whether any real partner form is
+out of range at all, which the reference cannot. Enforcement waits on a live render
+probe of a 12-option select, and that probe is what turns this from a log line into a
+decision.
+
 ## D9. SDK gateway: generated client, per-member pairing, bounded and sanitized
 > Since the Fin swap (#42): this implementation lives in the published
 > `gateway-engine` (Connect_Gateway repo) as `org.tsanet.gateway.engine`; the
