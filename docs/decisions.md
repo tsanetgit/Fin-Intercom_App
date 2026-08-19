@@ -1052,7 +1052,7 @@ because the next slice would otherwise start from an assumption that is half wro
 Inbound lands every case on a ticket (D14), because the ticket carries the states, the
 attributes and the response panel. On this platform that fights the grain: Fin's premise is
 that a conversation is tried first and a ticket exists only once work escalates. For the
-Anthropic pilot — partner Microsoft, on Salesforce — the question is whether an inbound
+Anthropic pilot — partner Microsoft, on MS Dynamics — the question is whether an inbound
 collaboration can be **answered** and then **retired** without ever becoming a ticket.
 
 ### Measured live on BETA, 2026-08-14
@@ -1147,7 +1147,7 @@ the ticketless-verdict slice (D22), so a note can already reach a plain conversa
 ### Open, and deliberately not decided here
 
 - **Is ACCEPTED-as-bookkeeping honest across connectors?** If Anthropic accepts purely to make an
-  answered case closable, Microsoft's Salesforce UI still badges it "Accepted", which their
+  answered case closable, Microsoft's MS Dynamics UI still badges it "Accepted", which their
   engineer may read as "an engineer has been assigned". Two connectors disagreeing about what a
   state *means* is the divergence class the estate's unconverged list exists to prevent. Raise on
   `Member-Integrations`; do not answer locally.
