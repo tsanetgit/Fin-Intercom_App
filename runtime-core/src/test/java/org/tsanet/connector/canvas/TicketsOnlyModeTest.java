@@ -44,6 +44,9 @@ class TicketsOnlyModeTest {
     @Autowired
     private FlowStateStore flows;
 
+    @Autowired
+    private org.tsanet.connector.intercom.SubmissionLinkTable links;
+
     private final ObjectMapper json = new ObjectMapper();
 
     private static String sign(byte[] body) throws Exception {
@@ -124,6 +127,22 @@ class TicketsOnlyModeTest {
         }
         assertEquals(OutboundFlowState.Status.DRAFT, flows.find(flowId).status(),
                 "the refusal is non-destructive: the flow survives untouched");
+    }
+
+    @Test
+    void inboundTicketPanelStillRendersUnderTheFlag() throws Exception {
+        // A partner case WE anchored (internalCaseNumber carries the inbound prefix,
+        // "inbound:" — package-private in InboundRequestHandler, literal here): the
+        // inbound panel must win over both the flag and the outbound flow. Structural
+        // by orElseGet ordering; pinned so a reordering cannot ship silently.
+        links.record(new org.tsanet.connector.intercom.SubmissionLink(
+                "tok-inb", "inbound:tok-inb", "w1", "ticket-9", "ticket-9",
+                "Partner Co", "2026-09-01T00:00:00Z", true, "probe", java.time.Instant.now()));
+        JsonNode canvas = post("/canvas/initialize",
+                "{\"workspace_id\":\"w1\",\"admin\":{\"name\":\"Agent A\",\"email\":\"agent@tsanet.org\"},"
+                        + "\"ticket\":{\"id\":\"ticket-9\"},\"conversation\":{\"id\":\"ticket-9\"}}");
+        assertFalse(allText(canvas).contains(NOTICE), "inbound panel, not the refusal");
+        assertTrue(allText(canvas).contains("From: Partner Co"), "the case view must render");
     }
 
     @Test
