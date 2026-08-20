@@ -83,6 +83,15 @@ flowchart LR
   link writes lost.
 - The poller cursor lives in the same database file, so it rides the same
   backup/restore path.
+- **Hourly snapshots with a 48-hour window (#59):** the sidecar also keeps dated
+  copies under `/data/hourly/<UTC yyyymmddHH>/` (links.db, links.db-wal,
+  connect-sdk.db — crash-consistent file copies, same semantics as the latest
+  copy), pruned as whole directories after 48h, so corruption that overwrites the
+  latest copy within one 5-minute cycle is still recoverable to a pre-corruption
+  hour. Boot restore uses the LATEST copy only; an hourly restore is manual: stop
+  the app (scale to 0 or stop the revision), copy the chosen snapshot's files over
+  `/data/links.db`, `/data/links.db-wal`, `/data/connect-sdk.db`, start the app —
+  the boot restore then picks them up.
 - This is a **recovery point, not a database**: production replaces the whole
   arrangement with a managed database, which the storage layer was explicitly
   designed to make a DataSource change rather than a rewrite.
