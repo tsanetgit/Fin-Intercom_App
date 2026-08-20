@@ -35,6 +35,38 @@ nothing by itself. The reference set:
 - `ticket.admin.assigned`
 - `ticket.note.created`
 
+### Permissions — the verified minimum (issue #57)
+
+Set the app's permission toggles (Configure → Authentication) to exactly this set,
+verified live 2026-08-20 against the reference workspace:
+
+- **Read tickets** and **Write tickets** — ticket create/read/update, state moves
+- **Read and write users** — contact listing/search
+- **Write users and companies** — despite the name, this is the scope that CREATES
+  and updates contacts; the synthetic partner contact needs it
+- **Write conversations** — notes via the `/reply` endpoints
+
+Every other editable toggle stays OFF. Intercom additionally grants four greyed,
+un-uncheckable baseline scopes to every app ("Read and list users and companies" —
+which bundles segments, companies, and tags reads — "Read conversations", "Read
+admins", "Read data when entered into the app"); reads riding those will succeed
+regardless and are not a misconfiguration.
+
+**Permission edits are inert until the token is regenerated.** Saving toggle changes
+does NOT change what the existing access token can do — the Authentication page shows
+a warning banner ("outdated permissions... may grant more access than currently
+configured") once they drift. The order that works: save the toggles → regenerate the
+token → update `INTERCOM_ACCESS_TOKEN` in the connector environment → restart. Between
+regeneration and restart the adapter's Intercom writes fail and recover via the
+reconciliation poller; signature verification is unaffected (it keys on the client
+secret).
+
+The call inventory this minimum was derived from — re-verify the toggle set whenever
+a new Intercom API call is added: `POST/GET/PUT /tickets` + ticket search,
+`GET /ticket_types` (config-time), `POST /tickets/{id}/reply` and
+`POST /conversations/{id}/reply` (notes), `GET/POST/PUT /contacts` + contact search
+(synthetic partner contact), `GET /me` (health).
+
 ## 2. The Back-office ticket type
 
 Inbound partner cases become tickets of one configured Back-office type ("Customer
