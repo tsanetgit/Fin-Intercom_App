@@ -1,0 +1,40 @@
+# Dependency currency (#58). Dependabot's maven updater reads only the pom in each
+# listed directory (it does not traverse <modules>), so all three poms are listed
+# explicitly. The github-actions entry also maintains the SHA-pinned `uses:` lines
+# in ci.yml — it recognizes the trailing `# vX.Y.Z` comment convention and updates
+# pin + comment together. Base-image (Dockerfile) scanning is deliberately not here:
+# it belongs with the CI image build that #55 introduces.
+#
+# PREREQUISITE (repo config, not this file): register PACKAGES_READ_TOKEN as a
+# *Dependabot* secret (Settings > Secrets and variables > Dependabot) — the Actions
+# secret of the same name is a separate store Dependabot cannot read. It serves two
+# consumers: the registries below (connect-gateway resolves gateway-engine and
+# connect-library from private GitHub Packages, which Dependabot cannot check
+# without credentials), and CI runs on Dependabot-opened PRs (workflows triggered
+# by Dependabot receive Dependabot secrets only, so without it the sdk job's
+# fail-red token guard fails every Dependabot PR).
+version: 2
+registries:
+  github-connect-gateway:
+    type: maven-repository
+    url: https://maven.pkg.github.com/tsanetgit/Connect_Gateway
+    username: shawn-tsanet
+    password: ${{secrets.PACKAGES_READ_TOKEN}}
+  github-connect-sdk:
+    type: maven-repository
+    url: https://maven.pkg.github.com/tsanetgit/Connect_SDK
+    username: shawn-tsanet
+    password: ${{secrets.PACKAGES_READ_TOKEN}}
+updates:
+  - package-ecosystem: "maven"
+    directories:
+      - "/"
+      - "/runtime-core"
+      - "/connect-gateway"
+    registries: "*"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
