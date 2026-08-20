@@ -1,0 +1,39 @@
+{
+  "_comment": "Written by the Security Review persona. A future pre-tag CI job reads this to decide whether a release is covered by a current audit. Do not hand-edit.",
+  "schema": 1,
+  "reviewed_commit": "7852f0b",
+  "reviewed_at": "2026-08-19",
+  "taxonomy_version": 4,
+  "reviewer": "tsanet-ops-security-review",
+  "review_scope": "full",
+  "self_reviewed": false,
+  "mechanical": {
+    "pass": 0,
+    "fail": 0,
+    "warn": 0,
+    "skip": 0
+  },
+  "findings": {
+    "high": 0,
+    "medium": 5,
+    "low": 0
+  },
+  "register": 7,
+  "open_findings": [
+    "FIRST REVIEW of this repository; no prior record. Full taxonomy walk at 7852f0b, advisor consulted adversarially once, its two blocking checks (log-token sensitivity, backup soft-delete) run and resolved before filing.",
+    "MEDIUM #55: deployed image has no provenance chain (local build, ACR admin credential, tag not digest). A live member is on this deployment; fix or record a time-boxed acceptance.",
+    "MEDIUM #56: CI packages credential is a classic repo-scope PAT inside a tag-pinned workflow with no permissions block.",
+    "MEDIUM #57: Intercom private-app token least-privilege is asserted to members but never verified against the live grant. Feeds the Anthropic security review directly.",
+    "MEDIUM #58: no dependency or base-image scanning (dependabot.yml verified absent). Carries a proposed taxonomy addition: Category 1 server-side dependency currency.",
+    "MEDIUM #59: single overwritten backup copy; corruption propagates to the only recovery point within 5 minutes. Share-level soft delete (7d) verified live but covers deletion, not overwrites.",
+    "SEVEN REGISTER ROWS seeded in SECURITY_REGISTER.md: credential inventory/rotation runbook (docs), PII/retention doc (docs), audit durability unverified (product), replay platform-gated with named compensating controls (product, accepted, review-by 2027-02-19), audit-line injection via partner strings (product), in-memory nonce restart window (product, accepted single-replica, review-by 2026-12-31), no mechanical check set (audit-tooling)."
+  ],
+  "notes": [
+    "LIVE RECEIPTS this review: unsigned POSTs to the deployed POC FQDN rejected 401 on /canvas/initialize, /webhooks/intercom, /webhooks/tsanet (invalid_signature), /admin/status (invalid_timestamp), / (unauthenticated_path, default-deny); GET /healthz 200 leaks only {ok, service, queued}; HTTP-to-HTTPS 301. Admin console root 401. Azure Files shareDeleteRetentionPolicy enabled=true days=7 on tsanetfinpocstg1e1f.",
+    "CATEGORY WALK. 1 supply chain: ci.yml push/pull_request only, no pull_request_target; secrets bound via env and referenced as $NAME (taxonomy-conform); findings #55 #56 #58. gateway-engine pinned to fixed version 0.1.2; OpenAPI spec vendored so the core CI job needs no cross-org credential. 2 credentials: secrets are ACA secretrefs; deploy renders the spec to mktemp chmod 600 with trap rm; admin secret openssl rand -hex 32, never printed; webhook secret minted server-side at subscription creation, keep-existing-else-mint across deploys; findings #56 #57 plus register rows 1. 3 authn/authz: default-deny signature filter, one verifier for three HMAC schemes plus the admin canonical-string scheme; constant-time compares; body-size caps; path normalization (decode, semicolon-strip, slash-collapse); fail-closed on missing secrets; admin writes carry timestamp plus one-shot nonce; live-probed as above; register rows on replay bounds and nonce restart window. 4 data flow: SubmissionLink stores routing/audit state only, no case content (by design, per the record's own comment); no server-side fetch of partner-supplied URLs (RestClient bases are fixed: api.intercom.io and the configured TSANet API) so SSRF is a verified non-finding; egress is those two destinations; finding #59 and the PII-doc register row. 5 audit: tsanet_audit event lines with tokens/ids; acting teammate recorded on links (D19); register rows on durability and line-injection. 6 platform-gated: Intercom signature schemes (body-only HMAC, SHA-1 webhooks) accepted with compensating controls; Intercom API version deliberately unpinned with read-back-by-id as the control (D22) and pinning recorded as a follow-up; ticket-state ids resolvable only under Intercom-Version: Unstable at config time (documented, one-off). 7 untrusted rendering: CLEAN. Partner HTML to canvas markdown via scheme allowlist (http/https/mailto) with entity-decode BEFORE the scheme check, bracket neutralization against entity-smuggled link syntax, bidi/control/format character stripping, script/style dropped with content, paragraph cap. Receipt: CanvasController.htmlNoteParagraphs and markdownLink.",
+    "NOT VERIFIED, stated plainly: Log Analytics retention on the POC; ACA tag-repull behavior on replica restart (mooted if #55's digest pinning lands); Azure Files file-level snapshots (share-level soft delete verified, file-level PITR not); the pilot app's actual Intercom grant set (that is #57); GitHub Packages fine-grained PAT support (part of #56's fix); the gateway-admin-console app's own deploy pipeline (Connect_Gateway repo, out of this review's target, flagged for its own pass); exhaustive proof that no log statement carries case content (targeted grep only).",
+    "PHASE-2 GATE recorded as a plan item, not a finding: before any multi-tenant deployment, add member_id to link rows and audit events while the schema is cheap; key secrets per member; make the deployment-per-member vs shared-app isolation decision explicitly. Today's deployment-per-member shape is the strong option; the admin ring tails are global and would leak cross-tenant in a shared deployment.",
+    "ACCEPTANCE: accepted_issues [] (no issue-lane acceptances). Register-lane acceptances: replay bounds (review-by 2027-02-19) and in-memory nonce (review-by 2026-12-31), granted by Shawn approving this commit, 2026-08-19."
+  ],
+  "accepted_issues": []
+}

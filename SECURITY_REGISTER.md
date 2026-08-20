@@ -1,0 +1,16 @@
+# Security register — Fin-Intercom_App
+
+Low-severity and tooling/docs findings from security reviews. One row per
+finding; open rows are swept into one batch cleanup PR per security train
+cycle. Filing policy: docs/SECURITY_REVIEW_TAXONOMY.md in
+shawnbray205/tsanet-ops.
+
+| date | sev | subject | finding | disposition | review-by |
+|---|---|---|---|---|---|
+| 2026-08-19 | LOW | docs | Credential inventory and a single rotation runbook are missing. Rotation paths exist but are scattered (Intercom creds: env update + redeploy, `intercom-setup.md`; TSANet webhook secret: keep-existing-else-mint, `azure-poc-deploy.sh`; admin secret: override + redeploy). No one document enumerates all credentials (Intercom token/secret, TSANet Entra client id/secret, `TSANET_WEBHOOK_SECRET`, `CONNECTOR_ADMIN_API_SECRET`, ACR push credential, `PACKAGES_READ_TOKEN`) with owner, rotation, expiry. | open | |
+| 2026-08-19 | LOW | docs | No PII/retention document equivalent to Zendesk_App's `PII_Retention_and_Data_Handling.md`. The link table stores the acting teammate's login (`submittedBy`); the Azure Files backup carries a copy; container logs carry case tokens/ids (a targeted grep found no case content in log statements, not an exhaustive proof). What erasure reaches which store (Intercom ticket, Connect case, link table, backup) is undocumented. | open | |
+| 2026-08-19 | LOW | product | Audit durability unverified: `tsanet_audit` events land in container stdout; Log Analytics retention on the POC environment was not verified this review. The admin plane's ring tails are in-memory and bounded by design (D20). | open | |
+| 2026-08-19 | LOW | product | Replay bounds rest on platform signature schemes: canvas and Intercom webhook HMACs cover body only, no timestamp (Intercom's scheme; SHA-1 on webhooks); the TSANet v2 scheme is likewise a body HMAC. Compensating controls are real and named: bounded dedupe by notification id (D4), unique-token claim-before-create (D14), authoritative re-fetch by token before acting (D22), polling as source of truth (D4). Accepted as a platform-gated limitation with those controls. | accepted (platform-gated; compensating controls named) | 2027-02-19 |
+| 2026-08-19 | LOW | product | Audit log lines interpolate third-party strings without newline neutralization (`partner={}` in `InboundRequestHandler`, `reason={}` from exception messages), an audit-line forgery vector for a hostile string. The rendering pipeline's control-character stripping does not cover the logging path. Fix: neutralize newlines/controls in the audit path or the logback pattern. | open | |
+| 2026-08-19 | LOW | product | The admin-plane nonce registry is an in-memory map, so a restart reopens the replay window within the timestamp tolerance (deliberate: single-replica by design, per the class comment). Impact today is bounded (admin plane is read + validate only). Becomes real at Phase 2 / multi-replica: the nonce and dedupe stores must move out of process memory and be tenant-keyed. | accepted (single-replica by design) | 2026-12-31 |
+| 2026-08-19 | LOW | audit-tooling | No mechanical check set for this repo: no `scripts/security-audit.py`, and `.security-audit.json` was first seeded by this review. The pre-tag gate pattern from Zendesk_App does not exist here (no release workflow exists yet either). | open | |
