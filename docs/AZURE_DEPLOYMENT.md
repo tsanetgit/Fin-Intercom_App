@@ -89,9 +89,13 @@ flowchart LR
   copy), pruned as whole directories after 48h, so corruption that overwrites the
   latest copy within one 5-minute cycle is still recoverable to a pre-corruption
   hour. Boot restore uses the LATEST copy only; an hourly restore is manual: stop
-  the app (scale to 0 or stop the revision), copy the chosen snapshot's files over
-  `/data/links.db`, `/data/links.db-wal`, `/data/connect-sdk.db`, start the app —
-  the boot restore then picks them up.
+  the app (scale to 0 or stop the revision), **delete** `/data/links.db`,
+  `/data/links.db-wal`, and `/data/connect-sdk.db`, then copy the chosen snapshot's
+  files in, and start the app — the boot restore then picks them up. Delete-first
+  is load-bearing, not tidiness: a snapshot may legitimately lack `links.db-wal`
+  (post-checkpoint), and copying over the top would leave a newer leftover wal
+  sitting beside the snapshot's older db, where SQLite can replay it into the
+  restored image on open.
 - This is a **recovery point, not a database**: production replaces the whole
   arrangement with a managed database, which the storage layer was explicitly
   designed to make a DataSource change rather than a rewrite.
