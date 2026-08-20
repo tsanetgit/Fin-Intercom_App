@@ -89,7 +89,10 @@ jobs:
         run: |
           set -euo pipefail
           az acr login --name "$ACR"
-          SHORT="${GITHUB_SHA:0:7}"
+          # HEAD after checkout, NOT GITHUB_SHA: on an annotated-tag push GITHUB_SHA is
+          # the tag OBJECT, while HEAD is the dereferenced commit the build context
+          # actually came from — the sha-<short> label must name the built commit (QA).
+          SHORT="$(git rev-parse --short=7 HEAD)"
           IMG="$ACR.azurecr.io/fin-gateway"
           docker build --platform linux/amd64 -t "$IMG:sha-$SHORT" .
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
@@ -100,7 +103,7 @@ jobs:
           # Filter by repo rather than trusting RepoDigests[0]: single-repo today, but
           # the ordering was an unasserted assumption (QA), and the filter also fails
           # loudly if no digest for OUR repo exists at all.
-          DIGEST="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMG:sha-$SHORT" | grep -m1 "^$IMG@")"
+          DIGEST="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMG:sha-$SHORT" | grep -m1 "^$IMG@" || true)"
           [ -n "$DIGEST" ] || { echo "::error::no repo digest for $IMG after push"; exit 1; }
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           {
