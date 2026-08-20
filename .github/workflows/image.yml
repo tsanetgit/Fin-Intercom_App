@@ -1,0 +1,108 @@
+# CI image build + push (#55): the deployable image is built from a commit in this
+# repo and pushed with a scoped, secretless credential — OIDC federation to the
+# Entra app fin-gateway-ci-push, which holds AcrPush on the registry and nothing
+# else. No ACR admin credential is involved. The federated credential's subject is
+# pinned to the `acr` environment (repo:tsanetgit/Fin-Intercom_App:environment:acr),
+# which is what lets one credential cover main pushes, tag pushes, and manual
+# dispatch: Entra federated credentials match subjects exactly, and per-ref
+# subjects would need one credential per ref.
+#
+# Tags produced: sha-<short> always; the git tag name on tag builds. The manual
+# deploy tag (:poc) is deliberately never written here — deploys are digest-pinned
+# by the deploy script, and consuming CI digests is the deploy-script half of #55
+# (separate PR). Tests are not run here: ci.yml runs them on the same commit; this
+# workflow only assembles and ships the artifact (-DskipTests).
+name: image
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ACR: tsanetfinpoc
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: acr
+    permissions:
+      contents: read
+      id-token: write # OIDC token for azure/login; no stored Azure secret exists
+    steps:
+      - name: Require the packages read token
+        env:
+          HAVE_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$HAVE_TOKEN" != "true" ]; then
+            echo "::error::PACKAGES_READ_TOKEN is not configured; the -Psdk build resolves gateway-engine and connect-library from GitHub Packages. Fail red, never silently skip (same rule as ci.yml)."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Maven settings for both package registries
+        env:
+          PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<'XML'
+          <settings><servers>
+            <server><id>github</id><username>ci</username><password>${env.PACKAGES_READ_TOKEN}</password></server>
+            <server><id>github-sdk</id><username>ci</username><password>${env.PACKAGES_READ_TOKEN}</password></server>
+          </servers></settings>
+          XML
+      - name: Build the exec jar
+        env:
+          # settings.xml defers to ${env.PACKAGES_READ_TOKEN} at Maven runtime, so
+          # the variable must exist on THIS step (same shape as ci.yml's sdk job).
+          PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        run: mvn -B --no-transfer-progress -Psdk -DskipTests package
+      - name: Assert the jar carries the SDK gateway
+        # Mirrors scripts/azure-poc-deploy.sh: a filename is not evidence. The
+        # Dockerfile re-asserts with its own grep during the build; this fails
+        # earlier and with a clearer message.
+        run: |
+          set -euo pipefail
+          # Glob, not a hardcoded version: the Dockerfile's COPY globs the same way,
+          # so a version bump cannot silently split the two.
+          set -- connect-gateway/target/connect-gateway-*-exec.jar
+          [ "$#" -eq 1 ] && [ -f "$1" ] || { echo "::error::expected exactly one connect-gateway exec jar, found: $*"; exit 1; }
+          JAR="$1"
+          unzip -l "$JAR" | grep -q "BOOT-INF/lib/gateway-engine-" \
+            || { echo "::error::$JAR carries no gateway-engine artifact — wrong jar or a pre-swap build"; exit 1; }
+      - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Build and push
+        id: push
+        run: |
+          set -euo pipefail
+          az acr login --name "$ACR"
+          SHORT="${GITHUB_SHA:0:7}"
+          IMG="$ACR.azurecr.io/fin-gateway"
+          docker build --platform linux/amd64 -t "$IMG:sha-$SHORT" .
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            docker tag "$IMG:sha-$SHORT" "$IMG:${GITHUB_REF_NAME}"
+            docker push "$IMG:${GITHUB_REF_NAME}"
+          fi
+          docker push "$IMG:sha-$SHORT"
+          DIGEST="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMG:sha-$SHORT")"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Image pushed"
+            echo '```'
+            echo "$DIGEST"
+            echo '```'
+            echo "Deploy this digest via the deploy script (digest consumption lands with the #55 deploy-script PR)."
+          } >> "$GITHUB_STEP_SUMMARY"
