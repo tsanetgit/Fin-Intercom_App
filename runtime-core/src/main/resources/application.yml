@@ -74,6 +74,9 @@ connector:
   max-body-bytes: 1048576
   dedupe-capacity: 10000
   queue-capacity: 10000
+  # Hardened profile (#65): true refuses new outbound collaborations from plain
+  # conversations (tickets-only mode). Deploy-time, per deployment, default off.
+  tickets-only: ${CONNECTOR_TICKETS_ONLY:false}
 
 # The published gateway engine binds gateway.tsanet.* (the canonical prefix from
 # the extraction). mode bridges from connector.tsanet.mode so the operator surface

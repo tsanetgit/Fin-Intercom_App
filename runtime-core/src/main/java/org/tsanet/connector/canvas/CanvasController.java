@@ -52,21 +52,30 @@ public class CanvasController {
     private final SubmissionLinkTable links;
     private final EventQueue queue;
     private final org.tsanet.connector.inbound.InboundPanel inbound;
+    private final org.tsanet.connector.config.ConnectorProperties properties;
 
     public CanvasController(FlowStateStore flows, TsanetGateway gateway, SubmissionLinkTable links,
-            EventQueue queue, org.tsanet.connector.inbound.InboundPanel inbound) {
+            EventQueue queue, org.tsanet.connector.inbound.InboundPanel inbound,
+            org.tsanet.connector.config.ConnectorProperties properties) {
         this.flows = flows;
         this.gateway = gateway;
         this.links = links;
         this.queue = queue;
         this.inbound = inbound;
+        this.properties = properties;
     }
 
     @PostMapping("/canvas/initialize")
     public Map<String, Object> initialize(@RequestBody Map<String, Object> payload) {
         // A ticket we created for a partner's case shows that case; everything else
-        // gets the outbound partner search.
-        return inbound.render(payload).orElseGet(() -> home(flows.create(), surface(payload), null));
+        // gets the outbound partner search — unless tickets-only mode (#65) is on and
+        // this is a plain conversation, which gets the static refusal instead of a
+        // flow. The guard lives in the orElseGet so inbound rendering is untouched,
+        // and no flow is ever created for a refused surface.
+        return inbound.render(payload).orElseGet(() ->
+                properties.ticketsOnly() && "conversation".equals(surface(payload))
+                        ? ticketsOnlyNotice()
+                        : home(flows.create(), surface(payload), null));
     }
 
     @PostMapping("/canvas/submit")
@@ -85,6 +94,16 @@ public class CanvasController {
             if (answered.isPresent()) {
                 return answered.get();
             }
+        }
+
+        // Tickets-only mode (#65): every OUTBOUND component on a conversation surface
+        // gets the refusal — including stale panels and check_status on pre-existing
+        // conversation flows, deliberately (the flag is deploy-time; a workspace that
+        // turned it on wants no conversation-side interaction, and the guard mutates
+        // nothing, so turning the flag off restores every flow untouched). Inbound
+        // components were dispatched above and are never affected.
+        if (properties.ticketsOnly() && "conversation".equals(surface)) {
+            return ticketsOnlyNotice();
         }
 
         OutboundFlowState state = flows.find(storedFlowId(payload));
@@ -854,6 +873,20 @@ public class CanvasController {
 
     private static String surface(Map<String, Object> payload) {
         return payload.get("ticket") != null ? "ticket" : "conversation";
+    }
+
+    /**
+     * Tickets-only refusal (#65): static, buttonless, and non-destructive — it neither
+     * creates nor touches a flow, so disabling the flag restores everything as it was.
+     * stored_data is an empty map, not null (CanvasKit.canvas is deliberately the only
+     * builder and Map.of rejects nulls); nothing round-trips from a buttonless canvas.
+     */
+    private static Map<String, Object> ticketsOnlyNotice() {
+        return CanvasKit.canvas(List.of(
+                CanvasKit.header("Partner collaboration"),
+                CanvasKit.muted("Partner collaboration is available from tickets only. "
+                        + "Open or create a ticket to start a new collaboration.")),
+                Map.of());
     }
 
     private static String storedFlowId(Map<String, Object> payload) {
