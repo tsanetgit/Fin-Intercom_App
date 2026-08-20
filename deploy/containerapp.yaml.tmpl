@@ -9,9 +9,16 @@
 #     EmptyDir volume): WAL mode cannot live on Azure Files SMB — it needs
 #     shared-memory mapping, and the symptom is SQLITE_BUSY at the very first
 #     connection (hit live 2026-08-08). The links-backup sidecar (same image, shell
-#     loop) copies the database pair to /data (Azure Files) every 5 minutes.
-#   - The app container's command restores the latest backup from /data before exec'ing
-#     the jar, so a replica restart loses at most one backup interval of links.
+#     loop) copies the database pair to /data (Azure Files) every 5 minutes, and once
+#     per hour snapshots the copies into /data/hourly/<UTC yyyymmddHH>/ (built in a
+#     .tmp dir, atomically mv'd into place, whole directories pruned after 48h), so
+#     corruption overwriting the latest copy no longer destroys the only recovery
+#     point (#59). Snapshots are crash-consistent file copies, same semantics as the
+#     latest copy. NOTE: literal shell dollars in the sidecar command are escaped as
+#     $$ for string.Template — keep it that way or the render raises KeyError.
+#   - The app container's command restores the LATEST backup from /data before exec'ing
+#     the jar, so a replica restart loses at most one backup interval of links; hourly
+#     snapshots are for manual point-in-time restore only (docs/AZURE_DEPLOYMENT.md).
 #   - min = max = 1: the poller cursor and the SQLite store are single-writer by
 #     design, and an always-warm replica is what keeps canvas responses inside
 #     Intercom's patience.
@@ -130,6 +137,15 @@ properties:
             mv -f /data/links.db-wal.new /data/links.db-wal 2>/dev/null;
             mv -f /data/links.db.new /data/links.db 2>/dev/null;
             cp -f /shared/connect-sdk.db /data/connect-sdk.db 2>/dev/null;
+            H=$$(date -u +%Y%m%d%H);
+            if [ ! -d /data/hourly/$$H ]; then
+            mkdir -p /data/hourly/.tmp.$$H;
+            cp -f /data/links.db /data/hourly/.tmp.$$H/links.db 2>/dev/null;
+            cp -f /data/links.db-wal /data/hourly/.tmp.$$H/links.db-wal 2>/dev/null;
+            cp -f /data/connect-sdk.db /data/hourly/.tmp.$$H/connect-sdk.db 2>/dev/null;
+            mv -f /data/hourly/.tmp.$$H /data/hourly/$$H 2>/dev/null;
+            fi;
+            find /data/hourly -mindepth 1 -maxdepth 1 -type d -mmin +2880 -exec rm -rf {} + 2>/dev/null;
             done
         resources:
           cpu: 0.25
