@@ -77,6 +77,17 @@ connector:
   # Hardened profile (#65): true refuses new outbound collaborations from plain
   # conversations (tickets-only mode). Deploy-time, per deployment, default off.
   tickets-only: ${CONNECTOR_TICKETS_ONLY:false}
+  # SDK operational cache retention (#66): connect-sdk.db caches case content
+  # (summaries, note text, response details, raw webhook payloads) with no upstream
+  # eviction. Blank = OFF, and the sweep bean does not even register (a template's
+  # empty env var stays off). Member opt-in per the connector-features convention.
+  # Durations parse in simple style ("30d", "720h") and ISO-8601, matching
+  # reconcile-lookback above. Terminal cases (CLOSED/REJECTED) and their child rows
+  # older than the window are evicted; OPEN cases never age out.
+  sdk-cache:
+    retention: ${CONNECTOR_SDK_CACHE_RETENTION:}
+    sweep-interval: ${CONNECTOR_SDK_CACHE_SWEEP_INTERVAL:PT6H}
+    sweep-initial-delay: ${CONNECTOR_SDK_CACHE_SWEEP_INITIAL_DELAY:PT10M}
 
 # The published gateway engine binds gateway.tsanet.* (the canonical prefix from
 # the extraction). mode bridges from connector.tsanet.mode so the operator surface
