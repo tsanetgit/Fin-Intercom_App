@@ -26,14 +26,16 @@ a stale token as failed annotations in the audit log.
 covers both ticket and conversation surfaces; the connector distinguishes them by the
 top-level `ticket` object that rides every canvas request from a ticket surface.
 
-**Webhook topics must be subscribed explicitly** — granting permissions subscribes
-nothing by itself. The reference set:
-
-- `ticket.created`
-- `ticket.state.updated`
-- `ticket.attribute.updated`
-- `ticket.admin.assigned`
-- `ticket.note.created`
+**Webhook topics: subscribe NONE.** No adapter code consumes Intercom webhook events
+today — no handler claims the Intercom event source, so every delivery of every topic
+is verified, queued, logged as key names only, and discarded. Verified live 2026-08-20
+(#65): a full inbound E2E (partner case → ticket → panel → poller) ran green with the
+subscription list empty, and the reference workspace now runs that way. An empty list
+is the norm, not just the hardened profile: it removes an entire data-in-motion surface
+for free. Topics must be subscribed explicitly if a future feature needs one (granting
+permissions subscribes nothing by itself); the historical reference set, for when that
+day comes: `ticket.created`, `ticket.state.updated`, `ticket.attribute.updated`,
+`ticket.admin.assigned`, `ticket.note.created`.
 
 ### Permissions — the verified minimum (issue #57)
 
@@ -66,6 +68,40 @@ a new Intercom API call is added: `POST/GET/PUT /tickets` + ticket search,
 `GET /ticket_types` (config-time), `POST /tickets/{id}/reply` and
 `POST /conversations/{id}/reply` (notes), `GET/POST/PUT /contacts` + contact search
 (synthetic partner contact), `GET /me` (health).
+
+### The hardened profile (issue #65)
+
+For a workspace whose security review wants the standing grant surface minimized
+(Anthropic's did), three verified reductions stack on the default minimum. Which grant
+gates what was probed live 2026-08-21 with a reduced-grant scratch app: ticket notes
+(`POST /tickets/{id}/reply`) ride **Write tickets** (200 under a tickets-only token),
+and only the conversation-reply endpoint needs **Write conversations** (401 under the
+same token, same underlying object).
+
+1. **Empty webhook subscription list** — the norm now anyway, see above.
+2. **Drop "Write conversations" by running tickets-only mode.** Set
+   `CONNECTOR_TICKETS_ONLY=true` on the deployment (deploy-time, per deployment,
+   default off): plain-conversation surfaces get a static refusal canvas instead of
+   the outbound flow, so nothing ever needs the conversation-reply endpoint for NEW
+   work. Two operator consequences to accept deliberately: agents lose canvas
+   visibility into PRE-EXISTING in-flight conversation-anchored collaborations
+   (every component is refused, `check_status` included; server-side processing of
+   those cases continues untouched), and partner-response notes for those same
+   pre-existing ticketless links will fail loudly in the audit log once the grant is
+   gone. **Drop the grant only when no conversation-anchored links are active**, or
+   accept the audit noise until they retire.
+3. **Revoke "Write users and companies" after onboarding.** The scope exists for the
+   one-time synthetic-contact create (plus its external_id stamp). Provision the
+   contact during onboarding, confirm an inbound case creates a ticket, then revoke
+   the toggle (save + regenerate + update the env, per the inertness rule above). If
+   the contact is ever deleted, the failure is loud and recoverable: ticket creation
+   fails, the claim releases, and the reconciliation poller retries after the grant
+   is restored and the token refreshed.
+
+The hardened standing grant set is therefore: **Read tickets, Write tickets, Read and
+write users**, plus the four un-uncheckable baseline scopes. Choose it for
+security-review-driven members from day one; the default profile remains right for
+workspaces that want conversation-anchored collaborations.
 
 ## 2. The Back-office ticket type
 
