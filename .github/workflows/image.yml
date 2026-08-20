@@ -97,7 +97,11 @@ jobs:
             docker push "$IMG:${GITHUB_REF_NAME}"
           fi
           docker push "$IMG:sha-$SHORT"
-          DIGEST="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMG:sha-$SHORT")"
+          # Filter by repo rather than trusting RepoDigests[0]: single-repo today, but
+          # the ordering was an unasserted assumption (QA), and the filter also fails
+          # loudly if no digest for OUR repo exists at all.
+          DIGEST="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMG:sha-$SHORT" | grep -m1 "^$IMG@")"
+          [ -n "$DIGEST" ] || { echo "::error::no repo digest for $IMG after push"; exit 1; }
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           {
             echo "## Image pushed"
