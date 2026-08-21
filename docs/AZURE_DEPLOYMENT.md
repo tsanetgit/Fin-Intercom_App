@@ -96,6 +96,15 @@ flowchart LR
   (post-checkpoint), and copying over the top would leave a newer leftover wal
   sitting beside the snapshot's older db, where SQLite can replay it into the
   restored image on open.
+- **SDK-cache retention (#66):** `connect-sdk.db` caches case content (summaries,
+  note text, response details, raw webhook payloads). With
+  `CONNECTOR_SDK_CACHE_RETENTION` set (blank = off, the default), an in-process
+  sweep evicts terminal-case rows and their children past the window; OPEN cases
+  never age out. What eviction reaches, and when: the live store immediately, the
+  latest `/data` copy within one 5-minute backup cycle, and the hourly snapshots as
+  they age out of the 48-hour prune window — so evicted content is fully gone from
+  every store at most 48h after the sweep that removed it. Enabling retention on a
+  live deployment is the standard deploy-script rerun (env var + restart).
 - This is a **recovery point, not a database**: production replaces the whole
   arrangement with a managed database, which the storage layer was explicitly
   designed to make a DataSource change rather than a rewrite.
