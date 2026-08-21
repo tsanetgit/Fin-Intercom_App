@@ -135,6 +135,19 @@ public class SdkCacheRetentionSweep {
             return null;
         }
         String cutoff = now.minus(retention).toString();
+        // Committed-so-far tracking OUTSIDE the try: a phase-2 or phase-3 failure
+        // arrives after phase 1 already committed, and the failure line must say what
+        // the database actually did, not pretend nothing happened (QA on #69).
+        String phase = "terminal-cases";
+        int cases = 0;
+        int notes = 0;
+        int responses = 0;
+        int attachCfg = 0;
+        int attachFwd = 0;
+        int orphanNotes = 0;
+        int orphanResponses = 0;
+        int orphanAttachCfg = 0;
+        int orphanAttachFwd = 0;
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + sqlitePath)) {
             try (Statement s = c.createStatement()) {
                 s.execute("PRAGMA busy_timeout = 5000");
@@ -143,11 +156,6 @@ public class SdkCacheRetentionSweep {
             }
             c.setAutoCommit(false);
             List<String> doomed = doomedTokens(c, cutoff);
-            int notes = 0;
-            int responses = 0;
-            int attachCfg = 0;
-            int attachFwd = 0;
-            int cases = 0;
             for (int i = 0; i < doomed.size(); i += CHUNK) {
                 List<String> chunk = doomed.subList(i, Math.min(i + CHUNK, doomed.size()));
                 notes += deleteByTokens(c, "case_note", "case_token", chunk);
@@ -157,14 +165,16 @@ public class SdkCacheRetentionSweep {
                 cases += deleteByTokens(c, "collaboration_request", "token", chunk);
             }
             c.commit();
+            phase = "orphans";
             // Orphans: children whose parent was evicted on an earlier run (or never
             // cached), themselves older than the window — the age check protects a
             // child cached mid-fetch before its parent row lands.
-            int orphanNotes = orphanDelete(c, "case_note", "fetched_at", cutoff);
-            int orphanResponses = orphanDelete(c, "case_response", "fetched_at", cutoff);
-            int orphanAttachCfg = orphanDelete(c, "attachment_config", "fetched_at", cutoff);
-            int orphanAttachFwd = orphanDelete(c, "attachment_forward_result", "forwarded_at", cutoff);
+            orphanNotes = orphanDelete(c, "case_note", "fetched_at", cutoff);
+            orphanResponses = orphanDelete(c, "case_response", "fetched_at", cutoff);
+            orphanAttachCfg = orphanDelete(c, "attachment_config", "fetched_at", cutoff);
+            orphanAttachFwd = orphanDelete(c, "attachment_forward_result", "forwarded_at", cutoff);
             c.commit();
+            phase = "webhook-events";
             int events;
             try (PreparedStatement ps = c.prepareStatement(
                     "DELETE FROM webhook_inbound_event WHERE received_at < ?")) {
@@ -185,8 +195,22 @@ public class SdkCacheRetentionSweep {
             return result;
         } catch (SQLException e) {
             // SQLITE_BUSY past the timeout lands here too: log, abort this run, let the
-            // next fixedDelay tick retry. Never crash the scheduler thread.
-            log.warn("tsanet_audit event=sdk_cache_sweep_failed reason={}", e.getMessage());
+            // next fixedDelay tick retry. Never crash the scheduler thread. The failing
+            // phase's own uncommitted deletes rolled back with the connection; counts
+            // from phases that COMMITTED are reported so the audit trail matches what
+            // the database actually did (a failed run can still have deleted rows).
+            boolean terminalCommitted = !"terminal-cases".equals(phase);
+            log.warn("tsanet_audit event=sdk_cache_sweep_failed phase={} reason={}"
+                            + " committed_cases={} committed_notes={} committed_responses={}"
+                            + " committed_attach_cfg={} committed_attach_fwd={} committed_orphans={}",
+                    phase, e.getMessage(),
+                    terminalCommitted ? cases : 0,
+                    terminalCommitted ? notes : 0,
+                    terminalCommitted ? responses : 0,
+                    terminalCommitted ? attachCfg : 0,
+                    terminalCommitted ? attachFwd : 0,
+                    "webhook-events".equals(phase)
+                            ? orphanNotes + orphanResponses + orphanAttachCfg + orphanAttachFwd : 0);
             return null;
         }
     }

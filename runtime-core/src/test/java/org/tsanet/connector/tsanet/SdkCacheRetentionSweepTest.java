@@ -175,4 +175,26 @@ class SdkCacheRetentionSweepTest {
         assertFalse(Files.exists(absent));
         assertTrue(Files.exists(db), "the real db is untouched by the other instance");
     }
+
+    @Test
+    void partialFailureKeepsCommittedPhasesAndReturnsNull() throws Exception {
+        // Phase 3 (webhook events) fails by construction: the table is missing. Phases
+        // 1 and 2 committed before the failure, so their deletes MUST survive — the
+        // reality the failure audit line reports committed_* counts for (QA on #69).
+        seedCase("gone-closed", "CLOSED", OLD, OLD);
+        seedChildren("gone-closed", OLD);
+        exec("INSERT INTO case_note (case_token, summary, description, token, fetched_at)"
+                + " VALUES (?,?,?,?,?)", "no-parent", "note", "text", "orphan-old", OLD);
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                Statement s = c.createStatement()) {
+            s.execute("DROP TABLE webhook_inbound_event");
+        }
+
+        assertNull(sweep.sweep(NOW), "a failed run reports failure");
+
+        assertEquals(List.of(), column("SELECT token FROM collaboration_request"),
+                "phase 1 committed before the phase-3 failure: the terminal case is gone");
+        assertEquals(List.of(), column("SELECT token FROM case_note"),
+                "phase 2 committed too: children and the aged orphan are gone");
+    }
 }

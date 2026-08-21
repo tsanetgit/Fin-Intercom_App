@@ -125,6 +125,11 @@ properties:
             secretRef: admin-api-secret
           - name: CONNECTOR_PUBLIC_BASE_URL
             value: "$PUBLIC_BASE_URL"
+          # SDK-cache retention (#66): blank keeps the sweep OFF (the bean does not
+          # register on blank, so an empty value here is safe by design). Set per
+          # member once they name a window, e.g. "30d".
+          - name: CONNECTOR_SDK_CACHE_RETENTION
+            value: "$SDK_CACHE_RETENTION"
       - name: links-backup
         image: $IMAGE
         command:
