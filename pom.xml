@@ -8,7 +8,7 @@
     <groupId>org.springframework.boot</groupId>
     <artifactId>spring-boot-starter-parent</artifactId>
     <!-- Pinned to match shawn-tsanet/connect-sdk-demo (the stack this runtime adopts). -->
-    <version>3.3.4</version>
+    <version>4.1.1</version>
     <relativePath/>
   </parent>
 
