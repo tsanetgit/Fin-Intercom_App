@@ -31,12 +31,12 @@ inside the YAML would break the comparison.
 
 ## Why it is vendored rather than checked out
 
-`connect-library` (in the public `shawn-tsanet/connect-sdk-demo`) resolves the
-spec through the Maven property `connect.openapi.spec`, defined in that repo's
-parent `pom.xml` as a sibling path `../Connect-API-Code/...` and used exactly
-once, as `<inputSpec>` in `connect-library/pom.xml`. Satisfying that sibling in
-CI previously meant checking out the private `Connect-API-Code`, which needed a
-cross-org token (`CONNECT_API_CODE_TOKEN`). That secret was never configured, so
+At the time, `connect-library` resolved the spec through the Maven property
+`connect.openapi.spec`, defined in its parent `pom.xml` as a sibling path
+`../Connect-API-Code/...` and used exactly once, as `<inputSpec>` in
+`connect-library/pom.xml`. Satisfying that sibling in CI previously meant checking
+out the private `Connect-API-Code`, which needed a cross-org token
+(`CONNECT_API_CODE_TOKEN`). That secret was never configured, so
 the whole `sdk` job skipped every real step **while reporting success** — the
 connector's gateway tests, including the sanitizer drift guard, had never once
 executed in CI.
@@ -62,10 +62,12 @@ Update the table above with the new commit, date and hash in the same commit as
 the file. Treat a refresh as a reviewed change: regenerated client code can move
 the connector's compile surface.
 
-**This file and the pinned `connect-sdk-demo` ref in `ci.yml` are a matched
-pair** — they are verified together by the sdk job. A bump PR moves both, or
-states explicitly why the other did not need to move, and its passing sdk run is
-the proof.
+**No longer a matched pair with anything in `ci.yml`.** That coupling described a
+CI step that built `connect-library` from a pinned source ref against this spec;
+it was removed by the Fin swap (`tsanetgit/Fin-Intercom_App#42`). The sdk job now
+resolves prebuilt artifacts from GitHub Packages and never reads this file, so no
+CI run verifies it and refreshing it proves nothing about the build. Codegen and
+spec handling belong to `tsanetgit/Connect_SDK`.
 
 ## Drift
 

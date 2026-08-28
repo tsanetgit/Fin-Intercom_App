@@ -12,8 +12,9 @@ design note; decisions and measured platform facts: [docs/decisions.md](docs/dec
   `/canvas/submit`), webhook intake (`/webhooks/intercom`, `/webhooks/tsanet`),
   signature verification for all three schemes, bounded dedupe + event queue,
   workspace registry seam, `/healthz`. No Connect SDK dependency, by rule.
-- `connect-gateway` (Maven profile `sdk`): the Connect SDK binding
-  (`com.tsanet:connect-library`, consumed verbatim from the `oauth` branch stack).
+- `connect-gateway` (Maven profile `sdk`): the Connect SDK binding. Consumes the
+  published `org.tsanet.connector:gateway-engine` and `com.tsanet:connect-library`
+  artifacts from GitHub Packages; carries no engine or SDK sources of its own.
 
 ## Build and run
 
@@ -25,17 +26,24 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn -B clean verify
 JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn -B -P sdk clean verify
 ```
 
-The `sdk` profile needs `connect-library` in the local Maven repository, built from
-`shawn-tsanet/connect-sdk-demo`. Its codegen reads the spec vendored here at
-`third_party/connect-api/openapi.yaml`, so no `Connect-API-Code` sibling checkout and
-no private-repo access are required:
+The `sdk` profile builds nothing from source. It resolves two published artifacts,
+`gateway-engine` from the `tsanetgit/Connect_Gateway` registry and `connect-library`
+from `tsanetgit/Connect_SDK`. GitHub Packages requires a token even for reads, so
+`~/.m2/settings.xml` needs both server ids the poms declare:
 
-```bash
-mvn -B -f ../connect-sdk-demo/pom.xml -pl connect-library -am install -DskipTests \
-  -Dconnect.openapi.spec=$PWD/third_party/connect-api/openapi.yaml
+```xml
+<settings><servers>
+  <server><id>github</id><username>YOUR_GITHUB_USER</username><password>YOUR_PAT</password></server>
+  <server><id>github-sdk</id><username>YOUR_GITHUB_USER</username><password>YOUR_PAT</password></server>
+</servers></settings>
 ```
 
-Plain `mvn verify` is always green on a fresh clone.
+The PAT needs `read:packages`, plus `repo` while the source repos are private. No
+sibling checkout, no codegen, and no `Connect-API-Code` access are involved. CI does
+the same thing with the `PACKAGES_READ_TOKEN` secret.
+
+Plain `mvn verify` builds only `runtime-core` and needs no credential at all; it is
+always green on a fresh clone.
 
 Run locally:
 
