@@ -6,7 +6,8 @@ import java.net.URI;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.resttestclient.TestRestTemplate;
+import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -23,6 +24,8 @@ import org.springframework.test.context.TestPropertySource;
  * (docs/decisions.md D1).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// Boot 4: @SpringBootTest no longer auto-provides TestRestTemplate; opt in explicitly.
+@AutoConfigureTestRestTemplate
 @TestPropertySource(properties = {
         "connector.intercom-client-secret=test-intercom-secret",
         "connector.tsanet-webhook-secret=test-tsanet-secret",

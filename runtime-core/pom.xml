@@ -31,6 +31,29 @@
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <!-- Boot 4 moved @AutoConfigureMockMvc out of spring-boot-test-autoconfigure
+           into its own module; starter-test no longer brings it transitively.
+           Same split handled in Connect_SDK#67 and Connect_Gateway#34. -->
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-webmvc-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <!-- Boot 4 moved TestRestTemplate out of spring-boot-test into its own
+           module and package (org.springframework.boot.resttestclient). -->
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-resttestclient</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <!-- TestRestTemplate's auto-configuration needs RestTemplateBuilder, which
+           Boot 4 also split out; without this the test context fails with
+           ClassNotFoundException: org.springframework.boot.restclient.RestTemplateBuilder. -->
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-restclient</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

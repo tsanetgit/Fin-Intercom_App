@@ -4,8 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -14,7 +14,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
@@ -80,7 +80,7 @@ class OutboundFlowTest {
     }
 
     private static JsonNode component(JsonNode canvas, String id) {
-        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").values().iterator(); it.hasNext(); ) {
             JsonNode component = it.next();
             if (component.has("id") && id.equals(component.get("id").asText())) {
                 return component;
@@ -99,7 +99,7 @@ class OutboundFlowTest {
 
     private static String allText(JsonNode canvas) {
         StringBuilder sb = new StringBuilder();
-        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").values().iterator(); it.hasNext(); ) {
             JsonNode component = it.next();
             if (component.has("text")) {
                 sb.append(component.get("text").asText()).append('\n');
@@ -134,7 +134,7 @@ class OutboundFlowTest {
 
         List<String> optionTexts = new ArrayList<>();
         List<String> optionIds = new ArrayList<>();
-        for (Iterator<JsonNode> it = severity.path("options").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = severity.path("options").values().iterator(); it.hasNext(); ) {
             JsonNode option = it.next();
             optionTexts.add(option.path("text").asText());
             optionIds.add(option.path("id").asText());
@@ -349,7 +349,7 @@ class OutboundFlowTest {
         String flow = flowId(initialize());
         JsonNode results = submit(flow, "search", "{\"q\":\"capacity\"}");
         long buttons = 0;
-        for (Iterator<JsonNode> it = results.at("/canvas/content/components").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = results.at("/canvas/content/components").values().iterator(); it.hasNext(); ) {
             JsonNode component = it.next();
             if (component.has("id") && component.get("id").asText().startsWith("select:")) {
                 buttons++;
@@ -388,7 +388,7 @@ class OutboundFlowTest {
     }
 
     private static String componentType(JsonNode canvas, String id) {
-        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").values().iterator(); it.hasNext(); ) {
             JsonNode component = it.next();
             if (component.has("id") && id.equals(component.get("id").asText())) {
                 return component.path("type").asText();

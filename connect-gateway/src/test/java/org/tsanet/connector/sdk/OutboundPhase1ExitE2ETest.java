@@ -4,8 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.UUID;
@@ -92,7 +92,7 @@ class OutboundPhase1ExitE2ETest {
 
     private String ticketTypeId() throws Exception {
         JsonNode types = intercom(HttpMethod.GET, "/ticket_types", null);
-        for (Iterator<JsonNode> it = types.path("data").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = types.path("data").values().iterator(); it.hasNext(); ) {
             JsonNode type = it.next();
             if ("TSANet Collaboration".equals(type.path("name").asText())) {
                 return type.path("id").asText();
@@ -165,7 +165,7 @@ class OutboundPhase1ExitE2ETest {
     }
 
     private static String componentIdStartingWith(JsonNode canvas, String prefix) {
-        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").values().iterator(); it.hasNext(); ) {
             JsonNode component = it.next();
             if (component.has("id") && component.get("id").asText().startsWith(prefix)) {
                 return component.get("id").asText();
@@ -180,7 +180,7 @@ class OutboundPhase1ExitE2ETest {
      */
     private static String requiredFieldValues(JsonNode formCanvas) {
         StringBuilder sb = new StringBuilder();
-        for (Iterator<JsonNode> it = formCanvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = formCanvas.at("/canvas/content/components").values().iterator(); it.hasNext(); ) {
             JsonNode component = it.next();
             String id = component.path("id").asText("");
             String label = component.path("label").asText("");
@@ -204,7 +204,7 @@ class OutboundPhase1ExitE2ETest {
 
     private static String allText(JsonNode canvas) {
         StringBuilder sb = new StringBuilder();
-        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").values().iterator(); it.hasNext(); ) {
             JsonNode component = it.next();
             if (component.has("text")) {
                 sb.append(component.get("text").asText()).append('\n');
