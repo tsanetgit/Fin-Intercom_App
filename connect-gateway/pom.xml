@@ -16,6 +16,7 @@
 
   <properties>
     <gateway-engine.version>0.1.2</gateway-engine.version>
+    <connect-library.version>0.2.0</connect-library.version>
   </properties>
 
   <!-- Where the engine resolves from. GitHub Packages needs a token even for
@@ -52,6 +53,22 @@
       <groupId>org.tsanet.connector</groupId>
       <artifactId>gateway-engine</artifactId>
       <version>${gateway-engine.version}</version>
+    </dependency>
+    <dependency>
+      <!-- Declared directly rather than relying on gateway-engine's transitive 0.1.0
+           (D6 forbids this in runtime-core, not here): SdkCacheRetentionSweep calls
+           com.tsanet.api.storage.CacheRetention.sweep() straight from Connect_SDK#66,
+           since gateway-engine has no wrapper for it (Shawn's explicit call - a
+           future adapter redoes this rather than inheriting it). Maven's
+           nearest-wins mediation makes this pin win over the engine's transitive
+           0.1.0; verified 0.1.0->0.2.0 is additive only for every class the engine
+           actually uses (two new source files, nothing pre-existing touched).
+           Revisit/remove this pin whenever gateway-engine.version bumps above 0.1.2:
+           a later engine may pin a newer connect-library itself, and this direct
+           declaration would silently force that back down to whatever is set here. -->
+      <groupId>com.tsanet</groupId>
+      <artifactId>connect-library</artifactId>
+      <version>${connect-library.version}</version>
     </dependency>
     <dependency>
       <!-- The shared gateway contract test (runtime-core test-jar). -->

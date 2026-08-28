@@ -82,8 +82,11 @@ connector:
   # eviction. Blank = OFF, and the sweep bean does not even register (a template's
   # empty env var stays off). Member opt-in per the connector-features convention.
   # Durations parse in simple style ("30d", "720h") and ISO-8601, matching
-  # reconcile-lookback above. Terminal cases (CLOSED/REJECTED) and their child rows
-  # older than the window are evicted; OPEN cases never age out.
+  # reconcile-lookback above. Terminal cases (CLOSED/REJECTED) and their note/
+  # response/attachment-config rows older than the window are evicted; OPEN cases
+  # never age out. attachment_forward_result is never evicted (no API read-back
+  # path) and children with no cached parent are never age-swept either
+  # (connect-library's CacheRetention, connect-gateway/.../sdk/SdkCacheRetentionSweep).
   sdk-cache:
     retention: ${CONNECTOR_SDK_CACHE_RETENTION:}
     sweep-interval: ${CONNECTOR_SDK_CACHE_SWEEP_INTERVAL:PT6H}
