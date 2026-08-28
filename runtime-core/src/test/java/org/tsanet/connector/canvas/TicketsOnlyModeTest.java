@@ -4,15 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
@@ -71,7 +71,7 @@ class TicketsOnlyModeTest {
 
     private static String allText(JsonNode canvas) {
         StringBuilder sb = new StringBuilder();
-        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").values().iterator(); it.hasNext(); ) {
             JsonNode component = it.next();
             if (component.has("text")) {
                 sb.append(component.get("text").asText()).append('\n');
@@ -81,7 +81,7 @@ class TicketsOnlyModeTest {
     }
 
     private static boolean hasButtons(JsonNode canvas) {
-        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").elements(); it.hasNext(); ) {
+        for (Iterator<JsonNode> it = canvas.at("/canvas/content/components").values().iterator(); it.hasNext(); ) {
             if ("button".equals(it.next().path("type").asText())) {
                 return true;
             }

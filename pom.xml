@@ -7,8 +7,9 @@
   <parent>
     <groupId>org.springframework.boot</groupId>
     <artifactId>spring-boot-starter-parent</artifactId>
-    <!-- Pinned to match shawn-tsanet/connect-sdk-demo (the stack this runtime adopts). -->
-    <version>3.3.4</version>
+    <!-- 4.1 is the current OSS-supported Spring Boot line (3.x is fully EOL;
+         see tsanetgit/Fin-Intercom_App#76 for the estate migration this is part of). -->
+    <version>4.1.1</version>
     <relativePath/>
   </parent>
 
