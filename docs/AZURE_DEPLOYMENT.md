@@ -99,8 +99,12 @@ flowchart LR
 - **SDK-cache retention (#66):** `connect-sdk.db` caches case content (summaries,
   note text, response details, raw webhook payloads). With
   `CONNECTOR_SDK_CACHE_RETENTION` set (blank = off, the default), an in-process
-  sweep evicts terminal-case rows and their children past the window; OPEN cases
-  never age out. What eviction reaches, and when: the live store immediately, the
+  sweep (`connect-library`'s `CacheRetention`, wired in `connect-gateway`) evicts
+  terminal-case rows and their note/response/attachment-config children past the
+  window; OPEN cases never age out. `attachment_forward_result` is never evicted —
+  it has no API read-back path, so eviction there would be unrecoverable — and a
+  child row with no cached parent case is never age-swept either. What eviction
+  reaches, and when: the live store immediately, the
   latest `/data` copy within one 5-minute backup cycle, and the hourly snapshots as
   they age out of the 48-hour prune window — so evicted content is fully gone from
   every store at most 48h after the sweep that removed it. Enabling retention on a
