@@ -15,11 +15,13 @@
   <description>SDK-mode assembly: imports the published gateway-engine (docs/decisions.md D6; Fin swap #42) and packages the deployable.</description>
 
   <properties>
-    <!-- 1.0.0 = the Boot 4 / Jackson 3 engine from tsanetgit/Connect_Gateway#34.
-         NOT YET RELEASED - the sdk profile stays red in CI until it is, and the
-         number moves if the release lands differently. -->
-    <gateway-engine.version>1.0.0</gateway-engine.version>
-    <connect-library.version>1.0.0</connect-library.version>
+    <!-- 2.0.0 = the engine on connect-library 2.0.0 (tsanetgit/Connect_Gateway#37,
+         released as v2.0.0). The TsanetGateway contract is unchanged from 1.0.0;
+         what moved is login handling: a failed login is a plain GatewayException,
+         never the ambiguous GatewayTimeoutException, and a stale token renews in
+         a login lane before the operation rather than inside its deadline. -->
+    <gateway-engine.version>2.0.0</gateway-engine.version>
+    <connect-library.version>2.0.0</connect-library.version>
   </properties>
 
   <!-- Where the engine resolves from. GitHub Packages needs a token even for
@@ -50,9 +52,9 @@
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <!-- The published engine (tsanetgit/Connect_Gateway#34's Boot 4 / Jackson 3
-           line). Brings com.tsanet:connect-library 1.0.0 transitively; this module
-           carries no engine sources since the Fin swap (#42). -->
+      <!-- The published engine (tsanetgit/Connect_Gateway v2.0.0, on the Boot 4 /
+           Jackson 3 line from #34). Brings com.tsanet:connect-library 2.0.0
+           transitively; this module carries no engine sources since the Fin swap (#42). -->
       <groupId>org.tsanet.connector</groupId>
       <artifactId>gateway-engine</artifactId>
       <version>${gateway-engine.version}</version>
@@ -65,7 +67,8 @@
            INVARIANT: this version MUST track gateway-engine's own connect-library
            pin - check the engine pom on every engine bump. Nearest-wins means a
            mismatch here silently overrides the engine's choice (the hazard the
-           pre-1.0.0 revision of this comment was about). Both agree at 1.0.0. -->
+           pre-1.0.0 revision of this comment was about). Both agree at 2.0.0: the
+           engine pom at tag v2.0.0 pins connect-library 2.0.0. -->
       <groupId>com.tsanet</groupId>
       <artifactId>connect-library</artifactId>
       <version>${connect-library.version}</version>
