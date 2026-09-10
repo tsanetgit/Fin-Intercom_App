@@ -38,18 +38,23 @@ fi
 [ -f "$JAR" ] || die "$JAR not built. Run:
   JAVA_HOME=$JAVA_HOME mvn -Psdk -DskipTests package"
 
-# The jar must actually contain the SDK gateway. Checking the FILE rather than
+# The jar must actually carry the SDK gateway. Checking the FILE rather than
 # trusting the path guards the exact substitution that breaks the container
 # image: a runtime-core jar copied under a connect-gateway name starts cleanly
 # and then cannot reach TSANet at all.
+# Since the Fin swap (#42) the engine rides as a nested artifact, so the marker
+# is the gateway-engine jar in BOOT-INF/lib, not the SDK gateway class name:
+# that class now lives INSIDE the nested jar and never appears in the outer
+# listing, which is why the pre-swap check rejected every correct build (#83).
+# Same marker as scripts/azure-poc-deploy.sh and image.yml's assert step.
 # Listing captured to a variable rather than piped into `grep -q`: under
 # `set -o pipefail`, grep -q exits on the first match, unzip takes SIGPIPE and
 # exits non-zero, and the pipeline reports FAILURE on the jar that is correct.
 # That false positive was real — it rejected the good jar on first run.
 jar_listing="$(unzip -l "$JAR" 2>/dev/null || true)"
 case "$jar_listing" in
-  *SdkTsanetGateway*) ;;
-  *) die "$JAR contains no SdkTsanetGateway — that is the runtime-core jar, which cannot run mode=sdk" ;;
+  *BOOT-INF/lib/gateway-engine-*) ;;
+  *) die "$JAR carries no gateway-engine artifact — wrong jar (runtime-core's cannot run mode=sdk), or a pre-swap build" ;;
 esac
 
 ENV_FILE="${ENV_FILE:-/Users/shawnray/code/tsanet-ops/.env}"

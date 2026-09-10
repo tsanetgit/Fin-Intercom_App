@@ -7,11 +7,17 @@ FROM eclipse-temurin:21-jre
 # fake mode (#21).
 COPY connect-gateway/target/connect-gateway-*-exec.jar /app.jar
 # A filename is not evidence (scripts/run-local.sh makes the identical check at
-# start-up): zip central-directory entry names are plain bytes, so a binary grep
-# proves the SDK gateway is actually aboard. -a forces text treatment across grep
-# variants.
-RUN grep -qa "SdkTsanetGateway" /app.jar \
-    || (echo "app.jar does not contain SdkTsanetGateway — wrong jar copied (#21)" && exit 1)
+# start-up). Since the Fin swap (#42) the engine rides as a nested artifact, so
+# the marker is the outer jar's own entry name BOOT-INF/lib/gateway-engine-<v>.jar:
+# zip central-directory entry names are plain bytes by the zip spec, so a binary
+# grep on the outer jar reads exactly what `unzip -l` would list. (The previous
+# marker, the SDK gateway class name, only matched because Spring Boot stores
+# nested jars uncompressed; it was inside the nested jar, not an entry here, #83.)
+# This JRE image has no unzip or jar tool; the strict listing check on the same
+# marker runs host-side in image.yml before the build. -a forces text treatment
+# across grep variants.
+RUN grep -qa "BOOT-INF/lib/gateway-engine-" /app.jar \
+    || (echo "app.jar carries no gateway-engine artifact — wrong jar copied (#21), or a pre-swap build" && exit 1)
 # Every safety guard in this repo is conditioned on the prod profile: both fake
 # gateways refuse to start, the in-memory link store refuses, a relative sqlite path
 # refuses. Without it the image comes up healthy on fixtures and a volatile link

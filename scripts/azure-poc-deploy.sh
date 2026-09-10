@@ -46,7 +46,7 @@ JAR="connect-gateway/target/connect-gateway-0.1.0-SNAPSHOT-exec.jar"
 [ -f "$JAR" ] || die "$JAR not built. Run: mvn -Psdk -DskipTests package"
 # A filename is not evidence: the deployable must actually carry the SDK gateway.
 # Since the Fin swap (#42) the engine rides as a nested artifact, so the marker is
-# the gateway-engine jar in BOOT-INF/lib, not a loose SdkTsanetGateway class.
+# the gateway-engine jar in BOOT-INF/lib, not the SDK gateway class name.
 jar_listing="$(unzip -l "$JAR" 2>/dev/null || true)"
 case "$jar_listing" in
   *BOOT-INF/lib/gateway-engine-*) ;;
