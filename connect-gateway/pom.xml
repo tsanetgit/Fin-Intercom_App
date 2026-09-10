@@ -64,11 +64,17 @@
            com.tsanet.api.storage.CacheRetention (Connect_SDK#66); a direct
            compile-time dependency gets a direct declaration rather than riding the
            engine's graph (D6 forbids com.tsanet.* in runtime-core, not here).
-           INVARIANT: this version MUST track gateway-engine's own connect-library
-           pin - check the engine pom on every engine bump. Nearest-wins means a
-           mismatch here silently overrides the engine's choice (the hazard the
-           pre-1.0.0 revision of this comment was about). Both agree at 2.0.0: the
-           engine pom at tag v2.0.0 pins connect-library 2.0.0. -->
+           INVARIANT: this version MUST equal gateway-engine's own connect-library
+           pin. Nearest-wins means a mismatch here silently overrides the engine's
+           choice (the hazard the pre-1.0.0 revision of this comment was about).
+           Asserted by the enforce-connect-library-pin execution below, which fails
+           the build at validate when the engine requests a different version than
+           this pin (#81). One thing silences that rule without fixing the
+           invariant, so it stays a manual check: an exclusion of connect-library
+           under gateway-engine removes the engine's request and the rule passes
+           (probed on #81). A dependencyManagement pin for connect-library in this
+           pom does not silence it (also probed): the direct pin still diverges from
+           the engine's request. -->
       <groupId>com.tsanet</groupId>
       <artifactId>connect-library</artifactId>
       <version>${connect-library.version}</version>
@@ -90,6 +96,38 @@
 
   <build>
     <plugins>
+      <plugin>
+        <!-- The INVARIANT on the connect-library dependency, as a check instead of
+             a comment (#81): dependencyConvergence fails when two different
+             versions of connect-library are requested in this module's tree, which
+             covers the engine's transitive pin disagreeing with the direct pin
+             above. Scoped to that one artifact so an unrelated convergence conflict
+             elsewhere in the tree cannot fail the build under this rule's name.
+             Bound to validate so it runs in both pipelines: ci.yml's verify and
+             image.yml's -DskipTests package. -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <version>3.6.2</version>
+        <executions>
+          <execution>
+            <id>enforce-connect-library-pin</id>
+            <phase>validate</phase>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <dependencyConvergence>
+                  <includes>
+                    <include>com.tsanet:connect-library</include>
+                  </includes>
+                </dependencyConvergence>
+              </rules>
+              <fail>true</fail>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <!-- The sdk-mode RUNNABLE artifact: runtime-core's exec jar alone cannot carry
              this module (the dependency points the other way), so the deployable jar
