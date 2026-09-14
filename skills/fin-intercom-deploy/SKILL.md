@@ -45,8 +45,10 @@ already been seen or deliberately designed against:
    enabling a deployment, confirm nothing else polls or receives webhooks as this member.
 2. **Single replica, always warm.** The link store is single-writer and the poller cursor
    assumes one instance. Scale-out is a storage redesign, not a replica-count change.
-   Always-warm matters because canvas responses have a hard ~2s budget in Intercom and a
-   cold start blows it.
+   Always-warm matters because the connector holds itself to a <2s canvas budget (decision
+   D2); Intercom itself fails a canvas response at roughly 10s (measured 2026-08-04: 8s
+   renders, 10s fails, and a slow submit strands the agent on a spinner). A cold start blows
+   the budget either way.
 3. **The link store must survive restarts.** Every open case's only route home is a row
    in the SQLite link table. Under the prod profile the connector refuses to start with
    the in-memory store or a relative SQLite path. Note the platform trap: SQLite WAL
