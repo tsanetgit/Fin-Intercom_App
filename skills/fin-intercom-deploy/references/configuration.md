@@ -42,6 +42,8 @@ ever drifts). Empty secrets fail closed; per-workspace ids have no defaults on p
 | `CONNECTOR_RECONCILE_LOOKBACK` / `_OVERLAP` | `24h` / `120s` | first-run window (the list endpoint has no pagination — this is the only load control) and the cursor overlap |
 | `CONNECTOR_ADMIN_API_SECRET` | blank | blank = no admin plane at all (fail closed). TSANet-internal console secret, never a member credential. |
 | `CONNECTOR_PUBLIC_BASE_URL` | blank | feeds `/admin/urls`; unset falls back to forwarded headers |
+| `CONNECTOR_TICKETS_ONLY` | `false` | hardened profile (#65): `true` refuses new outbound collaborations from plain conversations, so the Intercom token can drop "Write conversations". Deploy-time, per deployment. |
+| `CONNECTOR_SDK_CACHE_RETENTION` | blank | blank = off, and the sweep bean does not register. Set a duration (`30d`, `720h` or ISO-8601) to evict CLOSED/REJECTED cases and their note/response/attachment-config rows older than the window from `connect-sdk.db` (#66); OPEN cases never age out and `attachment_forward_result` is never evicted. Cadence: `CONNECTOR_SDK_CACHE_SWEEP_INTERVAL` (`PT6H`) and `CONNECTOR_SDK_CACHE_SWEEP_INITIAL_DELAY` (`PT10M`). |
 
 Port: `8792` (`server.port`). `/healthz` is the only unauthenticated route.
 
