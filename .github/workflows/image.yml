@@ -7,10 +7,12 @@
 # dispatch: Entra federated credentials match subjects exactly, and per-ref
 # subjects would need one credential per ref.
 #
-# Tags produced: sha-<short> always; the git tag name on tag builds. The manual
-# deploy tag (:poc) is deliberately never written here — deploys are digest-pinned
-# by the deploy script, and consuming CI digests is the deploy-script half of #55
-# (separate PR). Tests are not run here: ci.yml runs them on the same commit; this
+# Tags produced: sha-<short> always; the git tag name on tag builds. Every build is
+# attested (SLSA build provenance, signed by this workflow and stored on GitHub), and
+# the deploy script deploys only a v* tag build: it verifies the attestation names
+# this workflow, the tag's ref and the tag's commit, then pins the digest. Main and
+# manual builds are attested too but never deployable; the policy lives in the
+# verifier. Tests are not run here: ci.yml runs them on the same commit; this
 # workflow only assembles and ships the artifact (-DskipTests).
 name: image
 on:
@@ -32,7 +34,8 @@ jobs:
     environment: acr
     permissions:
       contents: read
-      id-token: write # OIDC token for azure/login; no stored Azure secret exists
+      id-token: write # OIDC token for azure/login and the attestation's signing certificate
+      attestations: write # store the build provenance attestation on GitHub
     steps:
       - name: Require the packages read token
         env:
@@ -106,10 +109,23 @@ jobs:
           DIGEST="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMG:sha-$SHORT" | grep -m1 "^$IMG@" || true)"
           [ -n "$DIGEST" ] || { echo "::error::no repo digest for $IMG after push"; exit 1; }
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          # The attestation's subject is the bare sha256:... digest; DIGEST is repo@digest.
+          echo "subject-digest=${DIGEST#*@}" >> "$GITHUB_OUTPUT"
           {
             echo "## Image pushed"
             echo '```'
             echo "$DIGEST"
             echo '```'
-            echo "Deploy this digest via the deploy script (digest consumption lands with the #55 deploy-script PR)."
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+              echo "Deploy it with: scripts/azure-poc-deploy.sh ${GITHUB_REF_NAME}"
+            else
+              echo "Not deployable: the deploy script takes only v* tag builds."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Attest build provenance
+        # No push-to-registry: the deploy script verifies with gh, which reads the
+        # attestation from GitHub, so a registry copy would have no consumer.
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.ACR }}.azurecr.io/fin-gateway
+          subject-digest: ${{ steps.push.outputs.subject-digest }}
