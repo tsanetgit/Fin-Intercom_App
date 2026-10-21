@@ -11,13 +11,17 @@
 #     (WAL cannot run on SMB — probed live, SQLITE_BUSY at first connection)
 #   - reconciliation poller ENABLED; TSANet v2 webhook registered idempotently, with
 #     the server-minted secret captured into the app's config
+#   - image pulls authenticate as a user-assigned identity holding AcrPull, never the
+#     registry admin credential (#55); scripts/azure-poc-migrate-pull-identity.sh
+#     retires the admin user once a deploy has pulled by identity
 #
 # Idempotent throughout: ARM upserts for every az resource, list-then-create for the
 # webhook. Run it again to update the image or config.
 #
-# Prereqs (docs/AZURE_POC.md): az CLI logged in, Docker Desktop RUNNING (ACR Tasks are
-# blocked on free/trial subscriptions, so the image builds locally), the exec jar
-# built, tsanet-ops .env present.
+# Prereqs (docs/AZURE_POC.md): az CLI logged in as a principal that may create role
+# assignments on the registry (Owner or User Access Administrator: the AcrPull grant),
+# Docker Desktop RUNNING (ACR Tasks are blocked on free/trial subscriptions, so the
+# image builds locally), the exec jar built, tsanet-ops .env present.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -31,6 +35,7 @@ LOC="${AZ_LOCATION:-westus2}"
 ACR="${AZ_ACR:-tsanetfinpoc}"
 ACA_ENV="${AZ_ACA_ENV:-fin-poc-env}"
 APP="${AZ_APP:-fin-gateway-poc}"
+PULL_IDENTITY="${AZ_PULL_IDENTITY:-fin-gateway-poc-pull}"
 IMAGE_TAG="fin-gateway:poc"
 SHARE="findata"
 
@@ -73,7 +78,46 @@ for prov in Microsoft.App Microsoft.ContainerRegistry Microsoft.OperationalInsig
 done
 
 echo "== container registry $ACR"
-az acr create -g "$RG" -n "$ACR" --sku Basic --admin-enabled true -o none
+# Created without the admin user (#55). An existing registry is left as it is:
+# disabling its admin user is a one-time, verified step
+# (scripts/azure-poc-migrate-pull-identity.sh), never a side effect of a deploy.
+if ! az acr show -n "$ACR" -o none 2>/dev/null; then
+  az acr create -g "$RG" -n "$ACR" --sku Basic -o none
+fi
+ACR_ID="$(az acr show -n "$ACR" --query id -o tsv)"
+
+echo "== image pull identity $PULL_IDENTITY (AcrPull on $ACR, nothing else)"
+if ! az identity show -g "$RG" -n "$PULL_IDENTITY" -o none 2>/dev/null; then
+  az identity create -g "$RG" -n "$PULL_IDENTITY" -l "$LOC" -o none
+fi
+PULL_IDENTITY_ID="$(az identity show -g "$RG" -n "$PULL_IDENTITY" --query id -o tsv)"
+PULL_PRINCIPAL_ID="$(az identity show -g "$RG" -n "$PULL_IDENTITY" --query principalId -o tsv)"
+[ -n "$PULL_IDENTITY_ID" ] && [ -n "$PULL_PRINCIPAL_ID" ] || die "could not resolve identity $PULL_IDENTITY"
+# Matched on principalId over the registry's own assignments: filtering by --assignee
+# would make the CLI look the identity up in the directory, where a just-created one
+# may not be visible yet.
+HAS_PULL="$(az role assignment list --scope "$ACR_ID" \
+  --query "length([?principalId=='$PULL_PRINCIPAL_ID' && roleDefinitionName=='AcrPull'])" -o tsv)"
+if [ "$HAS_PULL" = "0" ]; then
+  # Object id plus principal type skips the same lookup on create; the retry covers
+  # the window in which the new principal has not reached the authorization service.
+  GRANTED=0
+  for _ in 1 2 3 4; do
+    if az role assignment create --assignee-object-id "$PULL_PRINCIPAL_ID" \
+        --assignee-principal-type ServicePrincipal --role AcrPull --scope "$ACR_ID" -o none; then
+      GRANTED=1; break
+    fi
+    echo "   AcrPull grant not accepted yet (new identity still propagating); retrying in 15s"
+    sleep 15
+  done
+  [ "$GRANTED" = 1 ] || die "could not grant AcrPull to $PULL_IDENTITY on $ACR"
+  # A new grant can take minutes to reach the registry. Give it a head start before
+  # the spec below asks the app to pull with it. If it still is not in effect and the
+  # update produces a new revision, the revision wait at the end fails the deploy
+  # while the previous revision serves.
+  echo "   granted AcrPull; waiting ${AZ_ROLE_PROPAGATION_SECONDS:-120}s for it to take effect"
+  sleep "${AZ_ROLE_PROPAGATION_SECONDS:-120}"
+fi
 
 echo "== building image locally (linux/amd64) and pushing"
 az acr login -n "$ACR"
@@ -183,13 +227,12 @@ fi
 # ---- render the app spec and apply ------------------------------------------
 echo "== rendering app spec and applying (ARM upsert)"
 ENVIRONMENT_ID="$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)"
-ACR_PASSWORD="$(az acr credential show -n "$ACR" --query "passwords[0].value" -o tsv)"
 SPEC="$(mktemp)"; chmod 600 "$SPEC"
 trap 'rm -f "$SPEC"' EXIT
 ENVIRONMENT_ID="$ENVIRONMENT_ID" \
 LOCATION="$LOC" APP_NAME="$APP" \
 IMAGE="$IMAGE_REF" \
-ACR_SERVER="$ACR.azurecr.io" ACR_USER="$ACR" ACR_PASSWORD="$ACR_PASSWORD" \
+ACR_SERVER="$ACR.azurecr.io" PULL_IDENTITY_ID="$PULL_IDENTITY_ID" \
 TSANET_API_URL="$TSANET_SDK1_API_URL" TSANET_API_USER="$TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_ID" \
 TSANET_PASSWORD="$TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_SECRET" \
 TSANET_AUTH_MODE="client_credentials" \
@@ -217,10 +260,33 @@ if ! az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
   echo "   app absent — bootstrapping minimal shape first"
   az containerapp create -g "$RG" -n "$APP" --environment "$ACA_ENV" \
     --image "$IMAGE_REF" --registry-server "$ACR.azurecr.io" \
+    --user-assigned "$PULL_IDENTITY_ID" --registry-identity "$PULL_IDENTITY_ID" \
     --ingress external --target-port 8792 --min-replicas 1 --max-replicas 1 \
     --cpu 0.5 --memory 1Gi -o none
 fi
 az containerapp update -g "$RG" -n "$APP" --yaml "$SPEC" -o none
+
+# Wait for the revision this update produced, when it produced one: only a template
+# change (a new image digest, say) creates a revision; a configuration-only change
+# such as the registry entry does not, and then this passes at once. In
+# single-revision mode a new revision that cannot start (for example, an image pull
+# the identity is not yet allowed to make) never takes traffic, and the previous one
+# keeps serving with no other signal, so the deploy fails here and says so instead of
+# reporting success. Proving a pull under a configuration-only change is the
+# migration script's restart.
+echo "== waiting for the latest revision to become ready (up to 10 minutes)"
+REV="$(az containerapp show -g "$RG" -n "$APP" --query properties.latestRevisionName -o tsv)"
+READY=""
+for _ in $(seq 1 60); do
+  READY="$(az containerapp show -g "$RG" -n "$APP" --query properties.latestReadyRevisionName -o tsv)"
+  [ "$READY" = "$REV" ] && break
+  STATE="$(az containerapp revision show -g "$RG" -n "$APP" --revision "$REV" \
+    --query properties.provisioningState -o tsv 2>/dev/null || true)"
+  [ "$STATE" = "Failed" ] && die "revision $REV failed to provision; the previous revision (${READY:-none}) is still serving. Inspect: az containerapp revision show -g $RG -n $APP --revision $REV"
+  sleep 10
+done
+[ "$READY" = "$REV" ] || die "revision $REV was not ready after 10 minutes; the previous revision (${READY:-none}) is still serving"
+echo "   ready: $REV"
 
 FQDN="$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
 echo

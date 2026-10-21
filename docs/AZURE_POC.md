@@ -14,7 +14,9 @@ applies is `deploy/containerapp.yaml.tmpl`.
   https://azure.microsoft.com/free — $200 credit for 30 days plus 12 months of
   limited free services. The always-warm replica exceeds the Container Apps free
   grant, so after the credit this environment runs roughly $15–25/month.
-- `brew install azure-cli` if absent, then `az login`.
+- `brew install azure-cli` if absent, then `az login` as a principal that may create
+  role assignments on the registry (Owner or User Access Administrator): the deploy
+  script grants AcrPull to the image-pull identity.
 - **Docker Desktop must be running** for every deploy: the image builds locally
   because ACR Tasks (`az acr build`) are blocked on free/trial subscriptions
   (`TasksOperationsNotAllowed`).
@@ -26,18 +28,38 @@ cd /Users/shawnray/projects/tsanetgit-Fin-Intercom_App && JAVA_HOME=/opt/homebre
 ```
 
 The script is idempotent — the same command performs first deploy and every later
-update (new image, config change). It provisions the resource group, registry,
-Container Apps environment, storage account + file share, registers the TSANet v2
-webhook (list-then-create; the API mints the subscription secret at creation and the
-script captures it into the app's config), renders `deploy/containerapp.yaml.tmpl`
-and applies it, then prints the app URL and checks `/healthz`.
+update (new image, config change). It provisions the resource group, registry (without
+its admin user), the image-pull identity `fin-gateway-poc-pull` with AcrPull on the
+registry, the Container Apps environment, storage account + file share, registers the
+TSANet v2 webhook (list-then-create; the API mints the subscription secret at creation
+and the script captures it into the app's config), renders `deploy/containerapp.yaml.tmpl`
+and applies it, waits for the new revision to become ready when the update produced
+one (and fails, naming the revision, if it does not), then prints the app URL and
+checks `/healthz`.
 
 **First-ever deploy only:** the TSANet webhook needs the app's URL, which does not
 exist until the app does — run the script a second time to register it, as the
 script's closing message says.
 
 Parameters override via env: `AZ_RG`, `AZ_LOCATION`, `AZ_ACR`, `AZ_APP`,
-`AZ_STORAGE`, `ENV_FILE`.
+`AZ_STORAGE`, `AZ_PULL_IDENTITY`, `AZ_ROLE_PROPAGATION_SECONDS` (default 120), `ENV_FILE`.
+
+**One-time, after the first deploy that pulls by identity (#55):** retire the
+registry admin user.
+
+```bash
+cd /Users/shawnray/projects/tsanetgit-Fin-Intercom_App && ./scripts/azure-poc-migrate-pull-identity.sh
+```
+
+It changes nothing unless the app's registry entry names the identity, no password
+secret remains and the identity holds AcrPull. The admin user is registry-wide, so it
+also refuses, naming them, while any other container app still pulls from the registry
+or job with the admin credential (on 2026-10-21: the apps `gateway-admin-console`,
+`attachment-receiver` and `mongodb-mock`, and the job `mongodb-mock-smoke`). It then
+restarts the active revision,
+a short outage of the single replica, to prove the image pulls as the identity. Only
+after the revision is healthy again does it disable the admin user. `--no-restart`
+skips the restart when a revision has already started since the switch.
 
 ## 3. Intercom app configuration
 
@@ -97,9 +119,9 @@ Stated so the demo cannot be mistaken for more than it is:
   Files every 5 minutes and boot restores the latest copy. Worst case a restart
   loses the last 5 minutes of link writes. Production replaces this with a managed
   database — by design a DataSource change, not a rewrite.
-- **Personal subscription, registry admin credentials, secrets through the az CLI**
-  — all acceptable for a disposable test environment, none for production. The
-  production environment belongs on a TSANet-controlled subscription with managed
-  identity and a key vault.
+- **Personal subscription, secrets through the az CLI** — acceptable for a
+  disposable test environment, not for production. Image pulls already use a managed
+  identity (#55). The production environment belongs on a TSANet-controlled
+  subscription with a key vault for the remaining secrets.
 - **One replica by design** (single-writer store and poller cursor) — production
   availability needs the storage answer first.
