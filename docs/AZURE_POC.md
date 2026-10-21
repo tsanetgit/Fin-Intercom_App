@@ -61,29 +61,17 @@ it, as the script's closing message says. On a new registry, CI also needs push 
 before any tag can deploy: see "CI's push access, for a new registry" in
 [AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md).
 
-**If a deploy fails at the revision wait:** the app's registry config already uses the identity, so the previous revision serves only until its next restart. Re-run the deploy after a few minutes (AcrPull can take that long to take effect), or, while the admin user is still enabled, restore the admin-credential pull with `az containerapp registry set -g tsanet-fin-poc -n fin-gateway-poc --server tsanetfinpoc.azurecr.io --username tsanetfinpoc --password "$(az acr credential show -n tsanetfinpoc --query 'passwords[0].value' -o tsv)"`.
+**If a deploy fails at the revision wait:** the app's registry config already uses the identity, so the previous revision serves only until its next restart. Re-run the deploy with the same tag after a few minutes: AcrPull can take that long to take effect, and the script re-grants AcrPull if the identity has lost it.
 
 Parameters override via env: `AZ_RG`, `AZ_LOCATION`, `AZ_ACR`, `AZ_APP`,
 `AZ_STORAGE`, `AZ_PULL_IDENTITY`, `AZ_ROLE_PROPAGATION_SECONDS` (default 120), `ENV_FILE`.
 `AZ_ACR` must match `env.ACR` in `.github/workflows/image.yml`, the only registry CI
 pushes release images to; the script refuses a mismatch.
 
-**One-time, after the first deploy that pulls by identity (#55):** retire the
-registry admin user.
-
-```bash
-cd /Users/shawnray/projects/tsanetgit-Fin-Intercom_App && ./scripts/azure-poc-migrate-pull-identity.sh
-```
-
-It changes nothing unless the app's registry entry names the identity, no password
-secret remains and the identity holds AcrPull. The admin user is registry-wide, so it
-also refuses, naming them, while any other container app still pulls from the registry
-or job with the admin credential (on 2026-10-21: the apps `gateway-admin-console`,
-`attachment-receiver` and `mongodb-mock`, and the job `mongodb-mock-smoke`). It then
-restarts the active revision,
-a short outage of the single replica, to prove the image pulls as the identity. Only
-after the revision is healthy again does it disable the admin user. `--no-restart`
-skips the restart when a revision has already started since the switch.
+**Registry admin user:** retired on 2026-10-21 (#55). Every app and job that pulls from
+the registry does so as the `fin-gateway-poc-pull` identity, and a registry this script
+creates never enables the admin user. `scripts/azure-poc-migrate-pull-identity.sh` was
+the one-time migration for the original registry.
 
 ## 3. Intercom app configuration
 

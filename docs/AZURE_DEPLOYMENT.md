@@ -237,10 +237,8 @@ the registry, and a federated credential with subject
 new registry's name too, and deploy with `AZ_ACR` set to the same name: the deploy
 script refuses a registry CI does not push to.
 
-Not yet covered: the registry admin user stays enabled until the other apps on the
-registry stop pulling with it (see the migration step in [AZURE_POC.md](AZURE_POC.md)),
-and `v*` tags are not protected from being moved, which is why the deploy script
-re-checks the tag's commit against the attestation instead of trusting the tag.
+Not yet covered: `v*` tags are not protected from being moved, which is why the deploy
+script re-checks the tag's commit against the attestation instead of trusting the tag.
 
 ## Configuration
 
@@ -271,7 +269,7 @@ signature verification works in both schemes).
 | Purpose | committee demo / testing | member-facing service |
 | Link storage | SQLite + 5-minute backup loop (RPO ≈ 5 min) | managed database (a DataSource change by design) |
 | Subscription | personal free account | TSANet-controlled subscription |
-| Registry auth | user-assigned identity + AcrPull (#55); the admin user stays enabled until the other apps on the registry move off it | managed identity + AcrPull |
+| Registry auth | user-assigned identity + AcrPull (#55); the registry admin user is disabled | managed identity + AcrPull |
 | Secrets | injected by the deploy script from `.env` (requires `TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_ID`/`_CLIENT_SECRET` and `TSANET_BETA_ENTRA_TENANT_ID`/`_AUDIENCE`/`_SCOPE`, plus the existing sdk1 API URL var) | key vault references |
 | Replicas | 1 (single-writer store + poller cursor) | availability design follows the storage answer |
 | Intercom app | private app, dev workspace | pilot: private app on the member workspace; GA: public listing |
