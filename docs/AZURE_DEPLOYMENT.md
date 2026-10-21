@@ -174,19 +174,73 @@ after. The self-healing design worked on its first real failure, unstaged.
 
 ```mermaid
 flowchart LR
-    SRC["repo @ main"] --> MVN["mvn -Psdk package<br/>connect-gateway exec jar"]
-    MVN --> DB["docker build<br/>--platform linux/amd64<br/>+ jar-content assertion"]
-    DB --> PUSH["az acr login + docker push<br/>(ACR Tasks blocked on free subs)"]
-    PUSH --> WH["TSANet v2 webhook<br/>list-then-create<br/>(secret minted at creation)"]
+    TAG["release tag vX.Y.Z<br/>on a main commit"] --> CI["image.yml (CI)<br/>mvn -Psdk package + jar assertion<br/>docker build + push (OIDC, AcrPush)"]
+    CI --> ATT["attestation on GitHub<br/>(SLSA provenance: workflow,<br/>tag ref, commit, digest)"]
+    ATT --> DEP["azure-poc-deploy.sh vX.Y.Z<br/>tag on main? attestation verified?<br/>pin the digest"]
+    DEP --> WH["TSANet v2 webhook<br/>list-then-create<br/>(secret minted at creation)"]
     WH --> TMPL["render deploy/containerapp.yaml.tmpl<br/>(secrets injected, temp file)"]
-    TMPL --> CA["az containerapp create --yaml<br/>(ARM upsert)"]
-    CA --> OK["healthz check"]
+    TMPL --> CA["az containerapp update --yaml<br/>(PATCH; lists replaced whole)"]
+    CA --> OK["revision wait + healthz check"]
 ```
 
-One script does all of it, idempotently (`scripts/azure-poc-deploy.sh`); the same
+One script deploys, idempotently (`scripts/azure-poc-deploy.sh vX.Y.Z`); the same
 command is first deploy and update. The TSANet v2 subscription secret exists only
 in the creation response, so the script captures it there and carries it into the
 app spec.
+
+### Image provenance (#55)
+
+From the first release deployed this way on, every image this environment runs
+traces to a release tag and a commit in this repository. (An image deployed before
+that, by the earlier deploy script's local build, has no such record.) The chain:
+
+1. **Build in CI, never locally.** `.github/workflows/image.yml` builds the exec jar
+   and the image on GitHub-hosted runners for every push to `main`, every `v*` tag and
+   every manual run, and pushes `fin-gateway:sha-<short>` (plus `fin-gateway:<tag>` on
+   tag builds). It signs in to Azure by OIDC federation as the Entra app
+   `fin-gateway-ci-push`, which holds AcrPush on the registry and nothing else; its
+   federated credential is pinned to the repository's `acr` environment. No stored
+   Azure secret and no registry admin credential is involved.
+2. **Attest every build.** The same job records a SLSA build provenance attestation
+   for the pushed digest (`actions/attest`), signed with a certificate that names the
+   workflow, the git ref and the commit. It is stored on GitHub, not in the registry.
+3. **Deploy only a verified release.** The deploy script takes one release tag. It
+   refuses a tag whose commit is not on `main`, then refuses the registry's
+   `fin-gateway:<tag>` image unless `gh attestation verify` confirms it was built by
+   `image.yml` in this repository, from `refs/tags/<tag>`, at the tag's commit, on a
+   GitHub-hosted runner. Main builds and manual runs on a branch are attested but
+   never deployable. A manual run on a release tag rebuilds that tag's image from the
+   same workflow and commit, and is deployable like the tag push's own build.
+4. **Pin the digest.** The spec references `fin-gateway@sha256:...`, never a tag, so a
+   later push under the same tag cannot change what runs. The app pulls it as the
+   user-assigned identity `fin-gateway-poc-pull` (AcrPull only).
+
+Each deploy prints the release, commit, digest and the CI run that built the image.
+To trace a running image later, read its digest from the app, then look its
+attestation up on GitHub by that digest (no registry access or Docker needed):
+
+```bash
+az containerapp show -g tsanet-fin-poc -n fin-gateway-poc --query 'properties.template.containers[0].image' -o tsv
+gh api repos/tsanetgit/Fin-Intercom_App/attestations/<sha256:digest> -q '.attestations[0].bundle.dsseEnvelope.payload' | base64 -d \
+  | python3 -c 'import json,sys; p=json.load(sys.stdin)["predicate"]; print(p["buildDefinition"]["externalParameters"]["workflow"]["ref"], p["buildDefinition"]["resolvedDependencies"][0]["digest"]["gitCommit"], p["runDetails"]["metadata"]["invocationId"])'
+```
+
+That prints the tag ref, the commit and the CI run. It reads the record without
+checking its signature; re-running the deploy with the deployed tag repeats the
+full verification.
+
+**CI's push access, for a new registry:** `image.yml` runs in the repository's `acr`
+environment and signs in with the repository variables `AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`. The Entra app they name needs AcrPush on
+the registry, and a federated credential with subject
+`repo:tsanetgit/Fin-Intercom_App:environment:acr`. Set `env.ACR` in `image.yml` to the
+new registry's name too, and deploy with `AZ_ACR` set to the same name: the deploy
+script refuses a registry CI does not push to.
+
+Not yet covered: the registry admin user stays enabled until the other apps on the
+registry stop pulling with it (see the migration step in [AZURE_POC.md](AZURE_POC.md)),
+and `v*` tags are not protected from being moved, which is why the deploy script
+re-checks the tag's commit against the attestation instead of trusting the tag.
 
 ## Configuration
 

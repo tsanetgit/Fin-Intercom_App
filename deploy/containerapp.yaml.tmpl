@@ -1,8 +1,9 @@
 # Container App spec template for the Azure test environment. Rendered by
 # scripts/azure-poc-deploy.sh via python string.Template (dollar-sign placeholders)
 # into a short-lived temp file (it carries secret values once rendered), then applied with
-# `az containerapp create --yaml` — an ARM upsert, so the same render both creates
-# and updates.
+# `az containerapp update --yaml` to an app the script bootstraps first if absent. The
+# update is a PATCH, but each list in this spec (secrets, registries, containers)
+# replaces the app's whole list, so the same render serves first deploy and every update.
 #
 # The shape this encodes, and why (docs/AZURE_DEPLOYMENT.md has the diagrams):
 #   - TWO containers per replica. The app runs SQLite on /shared (an in-replica

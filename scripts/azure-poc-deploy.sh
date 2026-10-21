@@ -14,14 +14,25 @@
 #   - image pulls authenticate as a user-assigned identity holding AcrPull, never the
 #     registry admin credential (#55); scripts/azure-poc-migrate-pull-identity.sh
 #     retires the admin user once a deploy has pulled by identity
+#   - the image is the one image.yml built for a release tag, never a local build
+#     (#55): the tag must point at a commit on main, and the image's GitHub
+#     attestation must name image.yml, that tag and that commit before its digest
+#     is pinned into the spec
 #
-# Idempotent throughout: ARM upserts for every az resource, list-then-create for the
-# webhook. Run it again to update the image or config.
+# Usage: scripts/azure-poc-deploy.sh vX.Y.Z
+#
+# Idempotent throughout: every az resource is created when absent or updated in
+# place, and the webhook is list-then-create. Run it from a checkout of the tag it
+# deploys: the image comes from the tag, but the spec and this script come from the
+# checkout, so any other checkout can pair the image with a spec it never ran with.
+# Rollback is deploying the previous tag from a checkout of that tag. Re-running a tag
+# deploys that tag's current CI image, which is a new one if image.yml was run on the
+# tag again since the last deploy.
 #
 # Prereqs (docs/AZURE_POC.md): az CLI logged in as a principal that may create role
 # assignments on the registry (Owner or User Access Administrator: the AcrPull grant),
-# Docker Desktop RUNNING (ACR Tasks are blocked on free/trial subscriptions, so the
-# image builds locally), the exec jar built, tsanet-ops .env present.
+# gh CLI with `gh attestation verify`, tsanet-ops .env present (its GITHUB_TOKEN is
+# how gh reads this private repo), and the tag's image.yml run finished.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -31,31 +42,44 @@ REPO="$PWD"
 RG="${AZ_RG:-tsanet-fin-poc}"
 LOC="${AZ_LOCATION:-westus2}"
 # ACR names are GLOBALLY unique. Stable default keeps re-runs idempotent; if the
-# name is taken on a fresh setup, override with AZ_ACR=<yours>.
+# name is taken on a fresh setup, override with AZ_ACR=<yours> AND set image.yml's
+# env.ACR to the same name: CI pushes release images only there (checked below).
 ACR="${AZ_ACR:-tsanetfinpoc}"
 ACA_ENV="${AZ_ACA_ENV:-fin-poc-env}"
 APP="${AZ_APP:-fin-gateway-poc}"
 PULL_IDENTITY="${AZ_PULL_IDENTITY:-fin-gateway-poc-pull}"
-IMAGE_TAG="fin-gateway:poc"
 SHARE="findata"
+# Fixed on purpose: the attestation check below is only as strong as the repo and
+# workflow it requires, so neither is an override.
+GH_REPO="tsanetgit/Fin-Intercom_App"
+SIGNER_WORKFLOW="$GH_REPO/.github/workflows/image.yml"
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 
+REGCFG=""; SPEC=""
+cleanup() { [ -z "$REGCFG" ] || rm -rf "$REGCFG"; [ -z "$SPEC" ] || rm -f "$SPEC"; }
+trap cleanup EXIT
+
 # ---- pre-flight -------------------------------------------------------------
+[ "$#" -eq 1 ] || die "usage: $0 vX.Y.Z (a release tag whose image.yml run has finished)"
+TAG="$1"
+[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "'$TAG' is not a release tag of the form vX.Y.Z"
+# Release images exist only in the registry image.yml pushes to, so a deploy aimed at
+# any other registry could never find one. Refuse that up front, naming the fix.
+CI_ACR="$(sed -n 's/^  ACR: *//p' "$REPO/.github/workflows/image.yml")"
+[ -n "$CI_ACR" ] || die "could not read env.ACR from .github/workflows/image.yml"
+[ "$ACR" = "$CI_ACR" ] || die "this deploy targets registry $ACR, but image.yml pushes release images to $CI_ACR. Set image.yml's env.ACR to $ACR and give CI push access first (docs/AZURE_DEPLOYMENT.md, \"CI's push access, for a new registry\"), or unset AZ_ACR"
+
 command -v az >/dev/null || die "az CLI not installed (brew install azure-cli)"
 az account show >/dev/null 2>&1 || die "not logged in — run: az login"
-command -v docker >/dev/null || die "docker not installed"
-docker info >/dev/null 2>&1 || die "docker daemon not running — start Docker Desktop"
-
-JAR="connect-gateway/target/connect-gateway-0.1.0-SNAPSHOT-exec.jar"
-[ -f "$JAR" ] || die "$JAR not built. Run: mvn -Psdk -DskipTests package"
-# A filename is not evidence: the deployable must actually carry the SDK gateway.
-# Since the Fin swap (#42) the engine rides as a nested artifact, so the marker is
-# the gateway-engine jar in BOOT-INF/lib, not the SDK gateway class name.
-jar_listing="$(unzip -l "$JAR" 2>/dev/null || true)"
-case "$jar_listing" in
-  *BOOT-INF/lib/gateway-engine-*) ;;
-  *) die "$JAR carries no gateway-engine artifact — wrong jar, or a pre-swap build" ;;
+command -v gh >/dev/null || die "gh CLI not installed (brew install gh)"
+# Captured, not piped into `grep -q`: under pipefail, grep -q exits at the first
+# match, gh takes SIGPIPE writing the rest of its help, and the pipeline fails on a gh
+# that is fine (the same trap scripts/run-local.sh documents).
+GH_VERIFY_HELP="$(gh attestation verify --help 2>/dev/null || true)"
+case "$GH_VERIFY_HELP" in
+  *--source-digest*) ;;
+  *) die "this gh has no 'attestation verify --source-digest'; upgrade it (brew upgrade gh)" ;;
 esac
 
 ENV_FILE="${ENV_FILE:-/Users/shawnray/code/tsanet-ops/.env}"
@@ -67,6 +91,32 @@ need TSANET_SDK1_API_URL   # Connect API base (member-agnostic value); sdk1 nami
 need TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_ID; need TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_SECRET
 need TSANET_BETA_ENTRA_TENANT_ID; need TSANET_BETA_ENTRA_AUDIENCE; need TSANET_BETA_ENTRA_SCOPE
 need INTERCOM_DEV_ACCESS_TOKEN; need INTERCOM_DEV_CLIENT_SECRET
+
+# ---- release tag -> commit on main (GitHub only; nothing in Azure changes yet) ---
+echo "== release $TAG"
+gh api "repos/$GH_REPO" --silent 2>/dev/null \
+  || die "gh cannot read $GH_REPO. The .env's GITHUB_TOKEN must be the shawn-tsanet PAT, and a GH_TOKEN in your shell overrides it"
+# Resolved on GitHub, not in a local clone, so a stale or edited local tag cannot
+# stand in for the real one. An annotated tag points at a tag object: peel it.
+TAG_OBJ="$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" -q '.object.type + " " + .object.sha' 2>/dev/null)" \
+  || die "tag $TAG does not exist on $GH_REPO"
+read -r OBJ_TYPE COMMIT <<<"$TAG_OBJ"
+for _ in 1 2 3; do
+  [ "$OBJ_TYPE" = "tag" ] || break
+  TAG_OBJ="$(gh api "repos/$GH_REPO/git/tags/$COMMIT" -q '.object.type + " " + .object.sha')" \
+    || die "could not read tag object $COMMIT for $TAG"
+  read -r OBJ_TYPE COMMIT <<<"$TAG_OBJ"
+done
+[ "$OBJ_TYPE" = "commit" ] || die "tag $TAG does not resolve to a commit (got $OBJ_TYPE)"
+# Only a commit already on main may ship: a tag on a branch commit, or on a commit
+# main no longer contains, is refused. "behind" means main has moved past it.
+ON_MAIN="$(gh api "repos/$GH_REPO/compare/main...$COMMIT" -q .status)" \
+  || die "could not compare $COMMIT with main"
+case "$ON_MAIN" in
+  identical|behind) ;;
+  *) die "tag $TAG points at $COMMIT, which is not on main (compare status: $ON_MAIN)" ;;
+esac
+echo "   $TAG -> $COMMIT (on main)"
 
 # ---- provision --------------------------------------------------------------
 echo "== resource group $RG ($LOC)"
@@ -85,6 +135,45 @@ if ! az acr show -n "$ACR" -o none 2>/dev/null; then
   az acr create -g "$RG" -n "$ACR" --sku Basic -o none
 fi
 ACR_ID="$(az acr show -n "$ACR" --query id -o tsv)"
+
+echo "== image: image.yml's build of $TAG, verified by its attestation"
+# Pin the spec to the DIGEST, not the tag. ACA rolls a revision only when the
+# template changes and never re-resolves a same-tag reference, so a tag-referenced
+# spec turns "new image, config unchanged" into a silent no-op deploy (observed
+# live 2026-08-09: a rerun pushed digest 40a01e7c while the app kept running the
+# previous digest, invisibly). Resolved from ACR, so the value is what the registry
+# will actually serve, and the attestation below is checked against that same digest.
+IMAGE_DIGEST="$(az acr repository show -n "$ACR" --image "fin-gateway:$TAG" --query digest -o tsv 2>/dev/null || true)"
+[ -n "$IMAGE_DIGEST" ] || die "$ACR has no fin-gateway:$TAG. Its image.yml run has not finished or failed: gh run list -R $GH_REPO -w image.yml -b $TAG"
+IMAGE_REF="$ACR.azurecr.io/fin-gateway@$IMAGE_DIGEST"
+# gh reads the image manifest through the Docker credential config. A short-lived
+# ACR token in a private, temporary config serves that without Docker, and leaves
+# ~/.docker/config.json alone. The token never reaches the terminal.
+REGCFG="$(mktemp -d)"
+ACR_TOKEN="$(az acr login -n "$ACR" --expose-token --query accessToken -o tsv 2>/dev/null)" \
+  || die "could not get an ACR token for $ACR"
+printf '{"auths":{"%s":{"auth":"%s"}}}' "$ACR.azurecr.io" \
+  "$(printf '00000000-0000-0000-0000-000000000000:%s' "$ACR_TOKEN" | base64 | tr -d '\n')" \
+  > "$REGCFG/config.json"
+unset ACR_TOKEN
+# Every condition is required: built by this repo's image.yml on a GitHub-hosted
+# runner, from this tag's ref, at this tag's commit. That refuses a main build or a
+# manual run on a branch, a build from another repo or workflow, and an image whose tag was moved to
+# another commit after it was built. The certificate's source digest is the commit
+# even for an annotated tag (checked on tsanetgit/Zendesk_App v1.0.71).
+VERIFIED="$(DOCKER_CONFIG="$REGCFG" gh attestation verify "oci://$IMAGE_REF" \
+  --repo "$GH_REPO" --signer-workflow "$SIGNER_WORKFLOW" \
+  --source-ref "refs/tags/$TAG" --source-digest "$COMMIT" \
+  --deny-self-hosted-runners --format json)" \
+  || die "$IMAGE_REF failed attestation verification for $TAG at $COMMIT (gh's reason is above). If the tag's image.yml run is still going, its attestation step runs after the image push: wait for the run, then re-run. Not deploying it"
+# Incidental: the run URL is for the record, so a parse failure must not stop a
+# verified deploy.
+BUILD_RUN="$(printf '%s' "$VERIFIED" | python3 -c "
+import json,sys
+print(json.load(sys.stdin)[0]['verificationResult']['signature']['certificate']['runInvocationURI'])" 2>/dev/null)" \
+  || BUILD_RUN="(not parsed; see gh attestation verify)"
+echo "   verified, pinned: $IMAGE_REF"
+echo "   built by: $BUILD_RUN"
 
 echo "== image pull identity $PULL_IDENTITY (AcrPull on $ACR, nothing else)"
 if ! az identity show -g "$RG" -n "$PULL_IDENTITY" -o none 2>/dev/null; then
@@ -124,24 +213,14 @@ if [ "$HAS_PULL" = "0" ]; then
   sleep "${AZ_ROLE_PROPAGATION_SECONDS:-120}"
 fi
 
-echo "== building image locally (linux/amd64) and pushing"
-az acr login -n "$ACR"
-docker build --platform linux/amd64 -t "$ACR.azurecr.io/$IMAGE_TAG" .
-docker push "$ACR.azurecr.io/$IMAGE_TAG"
-
-# Pin the spec to the pushed DIGEST, not the tag. ACA rolls a revision only when the
-# template changes and never re-resolves a same-tag reference, so a tag-referenced
-# spec turns "pushed new code, config unchanged" into a silent no-op deploy (observed
-# live 2026-08-09: a rerun pushed digest 40a01e7c while the app kept running the
-# previous digest, invisibly). Resolved from ACR, not docker inspect, so the value is
-# what the registry will actually serve.
-IMAGE_DIGEST="$(az acr repository show -n "$ACR" --image "$IMAGE_TAG" --query digest -o tsv)"
-[ -n "$IMAGE_DIGEST" ] || die "could not resolve the pushed digest for $IMAGE_TAG from ACR"
-IMAGE_REF="$ACR.azurecr.io/${IMAGE_TAG%%:*}@$IMAGE_DIGEST"
-echo "   image pinned: $IMAGE_REF"
-
 echo "== container apps environment $ACA_ENV"
-az containerapp env create -g "$RG" -n "$ACA_ENV" -l "$LOC" -o none
+# Created only when absent. Re-running create on an existing environment is not a
+# no-op: with no workspace given, the CLI makes a new Log Analytics workspace and
+# points the environment's logs at it, for every app in the environment, on every
+# deploy (17 workspaces in tsanet-fin-poc by 2026-10-21).
+if ! az containerapp env show -g "$RG" -n "$ACA_ENV" -o none 2>/dev/null; then
+  az containerapp env create -g "$RG" -n "$ACA_ENV" -l "$LOC" -o none
+fi
 
 echo "== storage: account + file share + environment link"
 SUB_PREFIX="$(az account show --query id -o tsv | cut -c1-4)"
@@ -213,8 +292,8 @@ if [ -z "$WEBHOOK_SECRET" ]; then
 fi
 
 # ---- admin plane secret: keep-existing-else-mint ------------------------------
-# Same discipline as the webhook secret: the spec below is a FULL update, so any
-# secret not re-rendered into it is wiped. Keep the app's current value across
+# Same discipline as the webhook secret: the update below replaces the app's whole
+# secrets list with the spec's, so any secret not re-rendered into it is wiped. Keep the app's current value across
 # runs; mint one only when the app has none (first admin-enabled deploy). The
 # admin plane fails closed without it, so this line is what turns the plane on.
 ADMIN_API_SECRET="${CONNECTOR_ADMIN_API_SECRET_OVERRIDE:-}"
@@ -230,10 +309,9 @@ if [ -z "$ADMIN_API_SECRET" ]; then
 fi
 
 # ---- render the app spec and apply ------------------------------------------
-echo "== rendering app spec and applying (ARM upsert)"
+echo "== rendering app spec and applying (update --yaml: a PATCH whose lists, secrets and registries included, replace the app's)"
 ENVIRONMENT_ID="$(az containerapp env show -g "$RG" -n "$ACA_ENV" --query id -o tsv)"
 SPEC="$(mktemp)"; chmod 600 "$SPEC"
-trap 'rm -f "$SPEC"' EXIT
 ENVIRONMENT_ID="$ENVIRONMENT_ID" \
 LOCATION="$LOC" APP_NAME="$APP" \
 IMAGE="$IMAGE_REF" \
@@ -289,7 +367,7 @@ echo "== waiting for the latest revision to become ready (up to 10 minutes)"
 # By the time this can fail, the update above has already replaced the app-level
 # registry config, so the previous revision is a fallback only until its replica next
 # starts and pulls under that config. Say so, and point at the recovery step.
-WAIT_FAILED_NOTE="The previous revision is still serving for now, but its next restart pulls with the same identity config. Re-run this script in a few minutes (AcrPull propagation), or restore the admin-credential pull: docs/AZURE_POC.md, 'If a deploy fails at the revision wait'."
+WAIT_FAILED_NOTE="The previous revision is still serving for now, but its next restart pulls with the same identity config. Re-run this script with the same tag in a few minutes (AcrPull propagation), or restore the admin-credential pull: docs/AZURE_POC.md, 'If a deploy fails at the revision wait'."
 REV="$(az containerapp show -g "$RG" -n "$APP" --query properties.latestRevisionName -o tsv)"
 READY=""
 for _ in $(seq 1 60); do
@@ -306,9 +384,12 @@ echo "   ready: $REV"
 FQDN="$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
 echo
 echo "== deployed: https://$FQDN"
+echo "   release $TAG, commit $COMMIT"
+echo "   image   $IMAGE_REF"
+echo "   built by $BUILD_RUN"
 echo "== health (always-warm, so this answers immediately):"
 curl -s --max-time 60 "https://$FQDN/healthz" || true; echo
 echo
-echo "If this was a FIRST deploy: re-run once to register the TSANet webhook against"
+echo "If this was a FIRST deploy: re-run once with the same tag to register the TSANet webhook against"
 echo "the new FQDN, then point your Intercom app's canvas/webhook URLs at it"
 echo "(docs/AZURE_POC.md step 3)."

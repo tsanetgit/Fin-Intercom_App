@@ -17,34 +17,56 @@ applies is `deploy/containerapp.yaml.tmpl`.
 - `brew install azure-cli` if absent, then `az login` as a principal that may create
   role assignments on the registry (Owner or User Access Administrator): the deploy
   script grants AcrPull to the image-pull identity.
-- **Docker Desktop must be running** for every deploy: the image builds locally
-  because ACR Tasks (`az acr build`) are blocked on free/trial subscriptions
-  (`TasksOperationsNotAllowed`).
+- `brew install gh` if absent. The deploy script verifies each image's GitHub
+  attestation with `gh attestation verify`, reading this private repository with the
+  `GITHUB_TOKEN` in the tsanet-ops `.env`. A `GH_TOKEN` set in your shell overrides it.
+- No Docker and no local build: the image is the one CI built for the release tag
+  (`.github/workflows/image.yml`; ACR Tasks are blocked on free/trial subscriptions,
+  so CI builds and pushes instead).
 
 ## 2. Deploy or update
 
+Deploys are release-only. Tag a commit on `main`, wait for that tag's `image` workflow
+run to finish (`gh run list -R tsanetgit/Fin-Intercom_App -w image.yml -b vX.Y.Z`),
+then deploy the tag from a checkout of that tag (a detached worktree leaves the main
+clone where it is; remove it afterwards with `git worktree remove`):
+
 ```bash
-cd /Users/shawnray/projects/tsanetgit-Fin-Intercom_App && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home mvn -Psdk -DskipTests package && ./scripts/azure-poc-deploy.sh
+cd /Users/shawnray/projects/tsanetgit-Fin-Intercom_App && git fetch --tags origin && git worktree add --detach ../tsanetgit-Fin-Intercom_App-vX.Y.Z vX.Y.Z && cd ../tsanetgit-Fin-Intercom_App-vX.Y.Z && ./scripts/azure-poc-deploy.sh vX.Y.Z
 ```
 
-The script is idempotent — the same command performs first deploy and every later
-update (new image, config change). It provisions the resource group, registry (without
-its admin user), the image-pull identity `fin-gateway-poc-pull` with AcrPull on the
-registry, the Container Apps environment, storage account + file share, registers the
+The image comes from the tag, but the container spec and the script come from the
+checkout, so deploying from any other checkout can pair the image with a spec it never
+ran with. Before anything in Azure changes, the script resolves the tag on GitHub and
+refuses a tag whose commit is not on `main`. It then refuses the tag's image unless its
+attestation says `image.yml` in this repository built it from that tag at that commit
+on a GitHub-hosted runner, and pins the verified digest. Rollback is deploying the
+previous tag the same way, from a checkout of that tag. Re-running a tag deploys that
+tag's current CI image: if `image.yml` was run on the tag again since the last deploy,
+that is a new image (the base image floats), not a config-only change.
+
+The script is idempotent: the same command performs first deploy and every later
+update. It provisions the resource group, registry (without its admin user), the
+image-pull identity `fin-gateway-poc-pull` with AcrPull on the registry, the Container
+Apps environment (only when absent), storage account + file share, registers the
 TSANet v2 webhook (list-then-create; the API mints the subscription secret at creation
 and the script captures it into the app's config), renders `deploy/containerapp.yaml.tmpl`
 and applies it, waits for the new revision to become ready when the update produced
-one (and fails, naming the revision, if it does not), then prints the app URL and
-checks `/healthz`.
+one (and fails, naming the revision, if it does not), then prints the app URL, the
+release, commit, digest and build run, and checks `/healthz`.
 
 **First-ever deploy only:** the TSANet webhook needs the app's URL, which does not
-exist until the app does — run the script a second time to register it, as the
-script's closing message says.
+exist until the app does — run the script a second time with the same tag to register
+it, as the script's closing message says. On a new registry, CI also needs push access
+before any tag can deploy: see "CI's push access, for a new registry" in
+[AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md).
 
 **If a deploy fails at the revision wait:** the app's registry config already uses the identity, so the previous revision serves only until its next restart. Re-run the deploy after a few minutes (AcrPull can take that long to take effect), or, while the admin user is still enabled, restore the admin-credential pull with `az containerapp registry set -g tsanet-fin-poc -n fin-gateway-poc --server tsanetfinpoc.azurecr.io --username tsanetfinpoc --password "$(az acr credential show -n tsanetfinpoc --query 'passwords[0].value' -o tsv)"`.
 
 Parameters override via env: `AZ_RG`, `AZ_LOCATION`, `AZ_ACR`, `AZ_APP`,
 `AZ_STORAGE`, `AZ_PULL_IDENTITY`, `AZ_ROLE_PROPAGATION_SECONDS` (default 120), `ENV_FILE`.
+`AZ_ACR` must match `env.ACR` in `.github/workflows/image.yml`, the only registry CI
+pushes release images to; the script refuses a mismatch.
 
 **One-time, after the first deploy that pulls by identity (#55):** retire the
 registry admin user.
@@ -77,7 +99,7 @@ Developer Hub, its URLs point at the app's FQDN (printed by the deploy script):
 
 The container verifies canvas and webhook signatures with that app's client secret
 (`INTERCOM_DEV_CLIENT_SECRET` from `.env`); its access token drives ticket
-annotations. If the app's credentials rotate, update `.env` and re-run the deploy.
+annotations. If the app's credentials rotate, update `.env` and re-run the deploy with the deployed tag.
 
 ## 4. Demo checks
 
@@ -108,7 +130,7 @@ az group delete -n tsanet-fin-poc --yes --no-wait
 ```
 
 Everything lives in that one resource group, including the auto-created Log
-Analytics workspace. If you overrode `AZ_RG`, delete that name instead. Also delete
+Analytics workspaces (deploys before #55 made a new one on every run). If you overrode `AZ_RG`, delete that name instead. Also delete
 the TSANet v2 webhook subscription (as the Connect Gateway member: `DELETE /v1/webhooks/{id}` - the delete lives on v1; the v2 path 404s, probed at the 2026-08-11 cutover) so BETA
 stops attempting deliveries.
 
