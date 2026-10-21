@@ -110,6 +110,22 @@ REV="$(az containerapp show -g "$RG" -n "$APP" --query properties.latestReadyRev
 replicas() {
   az containerapp replica list -g "$RG" -n "$APP" --revision "$REV" --query "[].name" -o tsv | sort
 }
+# Exit 0 when every named replica is Running and every one of its containers reports
+# ready. This reads the replicas themselves: the revision's own runningState and
+# healthState can still describe the replica the restart replaced, so a new replica
+# stuck pulling its image would read healthy there.
+replicas_ready() {
+  az containerapp replica list -g "$RG" -n "$APP" --revision "$REV" -o json | python3 -c "
+import json,sys
+want=set(sys.argv[1:]); byname={r['name']:r for r in json.load(sys.stdin)}
+for name in want:
+    r=byname.get(name)
+    if not r: sys.exit(1)
+    p=r.get('properties') or {}
+    cs=p.get('containers') or []
+    if p.get('runningState')!='Running' or not cs or not all(c.get('ready') is True for c in cs): sys.exit(1)
+" $1
+}
 if [ "$RESTART" = 1 ]; then
   echo "== proving a pull as the identity: restarting $REV (short outage of the single replica)"
   BEFORE="$(replicas)"
@@ -125,8 +141,14 @@ if [ "$RESTART" = 1 ]; then
     sleep 10
   done
   [ -n "$NEW" ] || die "no new replica of $REV appeared after the restart — the admin user stays ENABLED"
-  wait_ready "$REV" || die "$REV did not come back healthy after the restart — the admin user stays ENABLED. Inspect: az containerapp revision show -g $RG -n $APP --revision $REV"
-  echo "   $REV restarted and healthy: the image was pulled as $PULL_IDENTITY"
+  NEW_LIST="$(printf '%s' "$NEW" | tr '\n' ' ')"
+  READY_NEW=0
+  for _ in $(seq 1 60); do
+    if replicas_ready "$NEW_LIST"; then READY_NEW=1; break; fi
+    sleep 10
+  done
+  [ "$READY_NEW" = 1 ] || die "new replica(s) $NEW_LIST of $REV did not become Running with every container ready — the admin user stays ENABLED. Inspect: az containerapp replica list -g $RG -n $APP --revision $REV"
+  echo "   new replica(s) $NEW_LIST running and ready: the image was pulled as $PULL_IDENTITY"
 else
   echo "== --no-restart: trusting that $REV started after the switch to identity pulls"
   wait_ready "$REV" || die "$REV is not healthy — the admin user stays ENABLED"
