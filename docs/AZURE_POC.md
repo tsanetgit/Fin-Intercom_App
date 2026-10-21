@@ -28,17 +28,22 @@ applies is `deploy/containerapp.yaml.tmpl`.
 
 Deploys are release-only. Tag a commit on `main`, wait for that tag's `image` workflow
 run to finish (`gh run list -R tsanetgit/Fin-Intercom_App -w image.yml -b vX.Y.Z`),
-then deploy the tag:
+then deploy the tag from a checkout of that tag (a detached worktree leaves the main
+clone where it is; remove it afterwards with `git worktree remove`):
 
 ```bash
-cd /Users/shawnray/projects/tsanetgit-Fin-Intercom_App && ./scripts/azure-poc-deploy.sh vX.Y.Z
+cd /Users/shawnray/projects/tsanetgit-Fin-Intercom_App && git fetch --tags origin && git worktree add --detach ../tsanetgit-Fin-Intercom_App-vX.Y.Z vX.Y.Z && cd ../tsanetgit-Fin-Intercom_App-vX.Y.Z && ./scripts/azure-poc-deploy.sh vX.Y.Z
 ```
 
-Before anything in Azure changes, the script resolves the tag on GitHub and refuses a
-tag whose commit is not on `main`. It then refuses the tag's image unless its
+The image comes from the tag, but the container spec and the script come from the
+checkout, so deploying from any other checkout can pair the image with a spec it never
+ran with. Before anything in Azure changes, the script resolves the tag on GitHub and
+refuses a tag whose commit is not on `main`. It then refuses the tag's image unless its
 attestation says `image.yml` in this repository built it from that tag at that commit
 on a GitHub-hosted runner, and pins the verified digest. Rollback is deploying the
-previous tag; re-running the deployed tag applies config changes only.
+previous tag the same way, from a checkout of that tag. Re-running a tag deploys that
+tag's current CI image: if `image.yml` was run on the tag again since the last deploy,
+that is a new image (the base image floats), not a config-only change.
 
 The script is idempotent: the same command performs first deploy and every later
 update. It provisions the resource group, registry (without its admin user), the

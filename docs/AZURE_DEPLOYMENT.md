@@ -190,8 +190,9 @@ app spec.
 
 ### Image provenance (#55)
 
-Every image this environment runs traces to a release tag and a commit in this
-repository:
+From the first release deployed this way on, every image this environment runs
+traces to a release tag and a commit in this repository. (An image deployed before
+that, by the earlier deploy script's local build, has no such record.) The chain:
 
 1. **Build in CI, never locally.** `.github/workflows/image.yml` builds the exec jar
    and the image on GitHub-hosted runners for every push to `main`, every `v*` tag and

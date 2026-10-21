@@ -22,9 +22,12 @@
 # Usage: scripts/azure-poc-deploy.sh vX.Y.Z
 #
 # Idempotent throughout: every az resource is created when absent or updated in
-# place, and the webhook is list-then-create. Run it with a new tag to deploy that
-# release, or with the deployed tag again to apply a config change. Rollback is
-# deploying the previous tag.
+# place, and the webhook is list-then-create. Run it from a checkout of the tag it
+# deploys: the image comes from the tag, but the spec and this script come from the
+# checkout, so any other checkout can pair the image with a spec it never ran with.
+# Rollback is deploying the previous tag from a checkout of that tag. Re-running a tag
+# deploys that tag's current CI image, which is a new one if image.yml was run on the
+# tag again since the last deploy.
 #
 # Prereqs (docs/AZURE_POC.md): az CLI logged in as a principal that may create role
 # assignments on the registry (Owner or User Access Administrator: the AcrPull grant),
