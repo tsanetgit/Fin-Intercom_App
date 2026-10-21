@@ -28,13 +28,14 @@
 location: $LOCATION
 name: $APP_NAME
 type: Microsoft.App/containerApps
-# Image pulls authenticate as this user-assigned identity, which holds AcrPull on the
-# registry and nothing else (#55). It is a resource of its own, so AcrPull can be
-# granted before the app switches to it and it survives the app being recreated.
-identity:
-  type: UserAssigned
-  userAssignedIdentities:
-    $PULL_IDENTITY_ID: {}
+# No top-level identity block on purpose. The registry entry below pulls as the
+# user-assigned identity $PULL_IDENTITY_ID (AcrPull on the registry, nothing else;
+# #55), and scripts/azure-poc-deploy.sh attaches that identity to the app with
+# `az containerapp identity assign` before applying this file. The block cannot live
+# here: the az CLI strips dictionary entries whose value is empty, so
+# `userAssignedIdentities: {<id>: {}}` reaches ARM as no identity at all and the
+# update fails with "Request requires identities to be assigned" (hit live 2026-10-21).
+# `update --yaml` is a PATCH, so leaving identity out keeps the one already assigned.
 properties:
   environmentId: $ENVIRONMENT_ID
   configuration:

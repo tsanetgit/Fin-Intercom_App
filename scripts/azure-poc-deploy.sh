@@ -269,6 +269,12 @@ if ! az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
     --ingress external --target-port 8792 --min-replicas 1 --max-replicas 1 \
     --cpu 0.5 --memory 1Gi -o none
 fi
+# Attach the pull identity before the spec references it. The spec cannot carry it
+# (see deploy/containerapp.yaml.tmpl: the CLI strips `userAssignedIdentities: {<id>: {}}`
+# to nothing). This command re-sends the app's current configuration and template with
+# the identity added, so it creates no revision and changes no pull, and it changes nothing once
+# the identity is assigned.
+az containerapp identity assign -g "$RG" -n "$APP" --user-assigned "$PULL_IDENTITY_ID" -o none
 az containerapp update -g "$RG" -n "$APP" --yaml "$SPEC" -o none
 
 # Wait for the revision this update produced, when it produced one: only a template
