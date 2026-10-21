@@ -28,6 +28,13 @@
 location: $LOCATION
 name: $APP_NAME
 type: Microsoft.App/containerApps
+# Image pulls authenticate as this user-assigned identity, which holds AcrPull on the
+# registry and nothing else (#55). It is a resource of its own, so AcrPull can be
+# granted before the app switches to it and it survives the app being recreated.
+identity:
+  type: UserAssigned
+  userAssignedIdentities:
+    $PULL_IDENTITY_ID: {}
 properties:
   environmentId: $ENVIRONMENT_ID
   configuration:
@@ -38,11 +45,8 @@ properties:
       transport: Auto
     registries:
       - server: $ACR_SERVER
-        username: $ACR_USER
-        passwordSecretRef: acr-password
+        identity: $PULL_IDENTITY_ID
     secrets:
-      - name: acr-password
-        value: $ACR_PASSWORD
       - name: tsanet-password
         value: $TSANET_PASSWORD
       - name: intercom-token

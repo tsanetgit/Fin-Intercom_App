@@ -217,7 +217,7 @@ signature verification works in both schemes).
 | Purpose | committee demo / testing | member-facing service |
 | Link storage | SQLite + 5-minute backup loop (RPO ≈ 5 min) | managed database (a DataSource change by design) |
 | Subscription | personal free account | TSANet-controlled subscription |
-| Registry auth | ACR admin user | managed identity + AcrPull |
+| Registry auth | user-assigned identity + AcrPull (#55); the admin user stays enabled until the other apps on the registry move off it | managed identity + AcrPull |
 | Secrets | injected by the deploy script from `.env` (requires `TSANET_CONNECT_GATEWAY_ENTRA_CLIENT_ID`/`_CLIENT_SECRET` and `TSANET_BETA_ENTRA_TENANT_ID`/`_AUDIENCE`/`_SCOPE`, plus the existing sdk1 API URL var) | key vault references |
 | Replicas | 1 (single-writer store + poller cursor) | availability design follows the storage answer |
 | Intercom app | private app, dev workspace | pilot: private app on the member workspace; GA: public listing |
