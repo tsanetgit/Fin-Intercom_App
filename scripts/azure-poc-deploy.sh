@@ -53,7 +53,7 @@ SIGNER_WORKFLOW="$GH_REPO/.github/workflows/image.yml"
 die() { echo "FATAL: $*" >&2; exit 1; }
 
 REGCFG=""; SPEC=""
-cleanup() { rm -rf "$REGCFG"; rm -f "$SPEC"; }
+cleanup() { [ -z "$REGCFG" ] || rm -rf "$REGCFG"; [ -z "$SPEC" ] || rm -f "$SPEC"; }
 trap cleanup EXIT
 
 # ---- pre-flight -------------------------------------------------------------
@@ -88,7 +88,9 @@ TAG_OBJ="$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" -q '.object.type + " " + .o
 read -r OBJ_TYPE COMMIT <<<"$TAG_OBJ"
 for _ in 1 2 3; do
   [ "$OBJ_TYPE" = "tag" ] || break
-  read -r OBJ_TYPE COMMIT <<<"$(gh api "repos/$GH_REPO/git/tags/$COMMIT" -q '.object.type + " " + .object.sha')"
+  TAG_OBJ="$(gh api "repos/$GH_REPO/git/tags/$COMMIT" -q '.object.type + " " + .object.sha')" \
+    || die "could not read tag object $COMMIT for $TAG"
+  read -r OBJ_TYPE COMMIT <<<"$TAG_OBJ"
 done
 [ "$OBJ_TYPE" = "commit" ] || die "tag $TAG does not resolve to a commit (got $OBJ_TYPE)"
 # Only a commit already on main may ship: a tag on a branch commit, or on a commit
@@ -148,10 +150,13 @@ VERIFIED="$(DOCKER_CONFIG="$REGCFG" gh attestation verify "oci://$IMAGE_REF" \
   --repo "$GH_REPO" --signer-workflow "$SIGNER_WORKFLOW" \
   --source-ref "refs/tags/$TAG" --source-digest "$COMMIT" \
   --deny-self-hosted-runners --format json)" \
-  || die "$IMAGE_REF failed attestation verification for $TAG at $COMMIT (gh's reason is above); not deploying it"
+  || die "$IMAGE_REF failed attestation verification for $TAG at $COMMIT (gh's reason is above). If the tag's image.yml run is still going, its attestation step runs after the image push: wait for the run, then re-run. Not deploying it"
+# Incidental: the run URL is for the record, so a parse failure must not stop a
+# verified deploy.
 BUILD_RUN="$(printf '%s' "$VERIFIED" | python3 -c "
 import json,sys
-print(json.load(sys.stdin)[0]['verificationResult']['signature']['certificate']['runInvocationURI'])")"
+print(json.load(sys.stdin)[0]['verificationResult']['signature']['certificate']['runInvocationURI'])" 2>/dev/null)" \
+  || BUILD_RUN="(not parsed; see gh attestation verify)"
 echo "   verified, pinned: $IMAGE_REF"
 echo "   built by: $BUILD_RUN"
 
@@ -347,7 +352,7 @@ echo "== waiting for the latest revision to become ready (up to 10 minutes)"
 # By the time this can fail, the update above has already replaced the app-level
 # registry config, so the previous revision is a fallback only until its replica next
 # starts and pulls under that config. Say so, and point at the recovery step.
-WAIT_FAILED_NOTE="The previous revision is still serving for now, but its next restart pulls with the same identity config. Re-run this script in a few minutes (AcrPull propagation), or restore the admin-credential pull: docs/AZURE_POC.md, 'If a deploy fails at the revision wait'."
+WAIT_FAILED_NOTE="The previous revision is still serving for now, but its next restart pulls with the same identity config. Re-run this script with the same tag in a few minutes (AcrPull propagation), or restore the admin-credential pull: docs/AZURE_POC.md, 'If a deploy fails at the revision wait'."
 REV="$(az containerapp show -g "$RG" -n "$APP" --query properties.latestRevisionName -o tsv)"
 READY=""
 for _ in $(seq 1 60); do

@@ -9,10 +9,10 @@
 #
 # Tags produced: sha-<short> always; the git tag name on tag builds. Every build is
 # attested (SLSA build provenance, signed by this workflow and stored on GitHub), and
-# the deploy script deploys only a v* tag build: it verifies the attestation names
-# this workflow, the tag's ref and the tag's commit, then pins the digest. Main and
-# manual builds are attested too but never deployable; the policy lives in the
-# verifier. Tests are not run here: ci.yml runs them on the same commit; this
+# the deploy script deploys only a release-tag (vX.Y.Z) build: it verifies the
+# attestation names this workflow, the tag's ref and the tag's commit, then pins the
+# digest. Main, manual and other v* tag builds are attested too but never deployable;
+# the policy lives in the verifier. Tests are not run here: ci.yml runs them on the same commit; this
 # workflow only assembles and ships the artifact (-DskipTests).
 name: image
 on:
@@ -70,7 +70,7 @@ jobs:
           PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
         run: mvn -B --no-transfer-progress -Psdk -DskipTests package
       - name: Assert the jar carries the SDK gateway
-        # Mirrors scripts/azure-poc-deploy.sh: a filename is not evidence. The
+        # Same marker as scripts/run-local.sh: a filename is not evidence. The
         # Dockerfile re-asserts with its own grep during the build; this fails
         # earlier and with a clearer message.
         run: |
@@ -92,9 +92,12 @@ jobs:
         run: |
           set -euo pipefail
           az acr login --name "$ACR"
-          # HEAD after checkout, NOT GITHUB_SHA: on an annotated-tag push GITHUB_SHA is
-          # the tag OBJECT, while HEAD is the dereferenced commit the build context
-          # actually came from — the sha-<short> label must name the built commit (QA).
+          # HEAD after checkout: the commit the build context actually came from, which
+          # the sha-<short> label must name (QA). On a tag push GITHUB_SHA is that same
+          # commit, annotated tags included: the attestation certificate's source digest
+          # carries GITHUB_SHA, and on tsanetgit/Zendesk_App's v1.0.71 (an annotated tag,
+          # same push trigger) it names the commit, not the tag object. The deploy
+          # script's --source-digest check relies on that.
           SHORT="$(git rev-parse --short=7 HEAD)"
           IMG="$ACR.azurecr.io/fin-gateway"
           docker build --platform linux/amd64 -t "$IMG:sha-$SHORT" .
@@ -116,10 +119,11 @@ jobs:
             echo '```'
             echo "$DIGEST"
             echo '```'
-            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-              echo "Deploy it with: scripts/azure-poc-deploy.sh ${GITHUB_REF_NAME}"
+            # Same tag form the deploy script accepts.
+            if [ "${GITHUB_REF_TYPE}" = "tag" ] && [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Deploy it, once the attestation step below has finished, with: scripts/azure-poc-deploy.sh ${GITHUB_REF_NAME}"
             else
-              echo "Not deployable: the deploy script takes only v* tag builds."
+              echo "Not deployable: the deploy script takes only release-tag (vX.Y.Z) builds."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Attest build provenance

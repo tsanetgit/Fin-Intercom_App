@@ -46,7 +46,7 @@ fi
 # is the gateway-engine jar in BOOT-INF/lib, not the SDK gateway class name:
 # that class now lives INSIDE the nested jar and never appears in the outer
 # listing, which is why the pre-swap check rejected every correct build (#83).
-# Same marker as scripts/azure-poc-deploy.sh and image.yml's assert step.
+# Same marker as image.yml's assert step and the Dockerfile's.
 # Listing captured to a variable rather than piped into `grep -q`: under
 # `set -o pipefail`, grep -q exits on the first match, unzip takes SIGPIPE and
 # exits non-zero, and the pipeline reports FAILURE on the jar that is correct.

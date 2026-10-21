@@ -213,10 +213,24 @@ repository:
    user-assigned identity `fin-gateway-poc-pull` (AcrPull only).
 
 Each deploy prints the release, commit, digest and the CI run that built the image.
-To trace a running image later, read its digest from the app
-(`az containerapp show -g tsanet-fin-poc -n fin-gateway-poc --query 'properties.template.containers[0].image' -o tsv`)
-and check it with `gh attestation verify oci://<that image> -R tsanetgit/Fin-Intercom_App --format json`,
-which needs registry access (`az acr login -n tsanetfinpoc`).
+To trace a running image later, read its digest from the app, then look its
+attestation up on GitHub by that digest (no registry access or Docker needed):
+
+```bash
+az containerapp show -g tsanet-fin-poc -n fin-gateway-poc --query 'properties.template.containers[0].image' -o tsv
+gh api repos/tsanetgit/Fin-Intercom_App/attestations/<sha256:digest> -q '.attestations[0].bundle.dsseEnvelope.payload' | base64 -d \
+  | python3 -c 'import json,sys; p=json.load(sys.stdin)["predicate"]; print(p["buildDefinition"]["externalParameters"]["workflow"]["ref"], p["buildDefinition"]["resolvedDependencies"][0]["digest"]["gitCommit"], p["runDetails"]["metadata"]["invocationId"])'
+```
+
+That prints the tag ref, the commit and the CI run. It reads the record without
+checking its signature; re-running the deploy with the deployed tag repeats the
+full verification.
+
+**CI's push access, for a new registry:** `image.yml` runs in the repository's `acr`
+environment and signs in with the repository variables `AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`. The Entra app they name needs AcrPush on
+the registry, and a federated credential with subject
+`repo:tsanetgit/Fin-Intercom_App:environment:acr`.
 
 Not yet covered: the registry admin user stays enabled until the other apps on the
 registry stop pulling with it (see the migration step in [AZURE_POC.md](AZURE_POC.md)),

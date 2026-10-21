@@ -53,7 +53,7 @@ release, commit, digest and build run, and checks `/healthz`.
 **First-ever deploy only:** the TSANet webhook needs the app's URL, which does not
 exist until the app does — run the script a second time with the same tag to register
 it, as the script's closing message says. On a new registry, CI also needs push access
-before any tag can deploy: see "Image provenance" in
+before any tag can deploy: see "CI's push access, for a new registry" in
 [AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md).
 
 **If a deploy fails at the revision wait:** the app's registry config already uses the identity, so the previous revision serves only until its next restart. Re-run the deploy after a few minutes (AcrPull can take that long to take effect), or, while the admin user is still enabled, restore the admin-credential pull with `az containerapp registry set -g tsanet-fin-poc -n fin-gateway-poc --server tsanetfinpoc.azurecr.io --username tsanetfinpoc --password "$(az acr credential show -n tsanetfinpoc --query 'passwords[0].value' -o tsv)"`.
@@ -123,7 +123,7 @@ az group delete -n tsanet-fin-poc --yes --no-wait
 ```
 
 Everything lives in that one resource group, including the auto-created Log
-Analytics workspace. If you overrode `AZ_RG`, delete that name instead. Also delete
+Analytics workspaces (deploys before #55 made a new one on every run). If you overrode `AZ_RG`, delete that name instead. Also delete
 the TSANet v2 webhook subscription (as the Connect Gateway member: `DELETE /v1/webhooks/{id}` - the delete lives on v1; the v2 path 404s, probed at the 2026-08-11 cutover) so BETA
 stops attempting deliveries.
 
