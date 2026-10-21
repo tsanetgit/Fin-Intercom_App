@@ -98,8 +98,9 @@ out of band.
 
 Deploy the container with the environment from
 [references/configuration.md](references/configuration.md). For the Azure reference
-environment the whole flow is one idempotent script (`scripts/azure-poc-deploy.sh`;
-runbook `docs/AZURE_POC.md`); for any other platform, replicate what it does.
+environment the whole flow is one idempotent script (`scripts/azure-poc-deploy.sh vX.Y.Z`,
+which deploys only the CI image of a release tag on `main`, after verifying its GitHub
+attestation; runbook `docs/AZURE_POC.md`); for any other platform, replicate what it does.
 
 The TSANet v2 webhook subscription needs the deployed URL, which does not exist until
 the app does — so on a first-ever deploy this is a second pass: deploy, then register

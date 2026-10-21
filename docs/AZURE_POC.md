@@ -17,29 +17,44 @@ applies is `deploy/containerapp.yaml.tmpl`.
 - `brew install azure-cli` if absent, then `az login` as a principal that may create
   role assignments on the registry (Owner or User Access Administrator): the deploy
   script grants AcrPull to the image-pull identity.
-- **Docker Desktop must be running** for every deploy: the image builds locally
-  because ACR Tasks (`az acr build`) are blocked on free/trial subscriptions
-  (`TasksOperationsNotAllowed`).
+- `brew install gh` if absent. The deploy script verifies each image's GitHub
+  attestation with `gh attestation verify`, reading this private repository with the
+  `GITHUB_TOKEN` in the tsanet-ops `.env`. A `GH_TOKEN` set in your shell overrides it.
+- No Docker and no local build: the image is the one CI built for the release tag
+  (`.github/workflows/image.yml`; ACR Tasks are blocked on free/trial subscriptions,
+  so CI builds and pushes instead).
 
 ## 2. Deploy or update
 
+Deploys are release-only. Tag a commit on `main`, wait for that tag's `image` workflow
+run to finish (`gh run list -R tsanetgit/Fin-Intercom_App -w image.yml -b vX.Y.Z`),
+then deploy the tag:
+
 ```bash
-cd /Users/shawnray/projects/tsanetgit-Fin-Intercom_App && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home mvn -Psdk -DskipTests package && ./scripts/azure-poc-deploy.sh
+cd /Users/shawnray/projects/tsanetgit-Fin-Intercom_App && ./scripts/azure-poc-deploy.sh vX.Y.Z
 ```
 
-The script is idempotent — the same command performs first deploy and every later
-update (new image, config change). It provisions the resource group, registry (without
-its admin user), the image-pull identity `fin-gateway-poc-pull` with AcrPull on the
-registry, the Container Apps environment, storage account + file share, registers the
+Before anything in Azure changes, the script resolves the tag on GitHub and refuses a
+tag whose commit is not on `main`. It then refuses the tag's image unless its
+attestation says `image.yml` in this repository built it from that tag at that commit
+on a GitHub-hosted runner, and pins the verified digest. Rollback is deploying the
+previous tag; re-running the deployed tag applies config changes only.
+
+The script is idempotent: the same command performs first deploy and every later
+update. It provisions the resource group, registry (without its admin user), the
+image-pull identity `fin-gateway-poc-pull` with AcrPull on the registry, the Container
+Apps environment (only when absent), storage account + file share, registers the
 TSANet v2 webhook (list-then-create; the API mints the subscription secret at creation
 and the script captures it into the app's config), renders `deploy/containerapp.yaml.tmpl`
 and applies it, waits for the new revision to become ready when the update produced
-one (and fails, naming the revision, if it does not), then prints the app URL and
-checks `/healthz`.
+one (and fails, naming the revision, if it does not), then prints the app URL, the
+release, commit, digest and build run, and checks `/healthz`.
 
 **First-ever deploy only:** the TSANet webhook needs the app's URL, which does not
-exist until the app does — run the script a second time to register it, as the
-script's closing message says.
+exist until the app does — run the script a second time with the same tag to register
+it, as the script's closing message says. On a new registry, CI also needs push access
+before any tag can deploy: see "Image provenance" in
+[AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md).
 
 **If a deploy fails at the revision wait:** the app's registry config already uses the identity, so the previous revision serves only until its next restart. Re-run the deploy after a few minutes (AcrPull can take that long to take effect), or, while the admin user is still enabled, restore the admin-credential pull with `az containerapp registry set -g tsanet-fin-poc -n fin-gateway-poc --server tsanetfinpoc.azurecr.io --username tsanetfinpoc --password "$(az acr credential show -n tsanetfinpoc --query 'passwords[0].value' -o tsv)"`.
 
@@ -77,7 +92,7 @@ Developer Hub, its URLs point at the app's FQDN (printed by the deploy script):
 
 The container verifies canvas and webhook signatures with that app's client secret
 (`INTERCOM_DEV_CLIENT_SECRET` from `.env`); its access token drives ticket
-annotations. If the app's credentials rotate, update `.env` and re-run the deploy.
+annotations. If the app's credentials rotate, update `.env` and re-run the deploy with the deployed tag.
 
 ## 4. Demo checks
 
