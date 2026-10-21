@@ -103,10 +103,15 @@ if [ "$HAS_PULL" = "0" ]; then
   # the window in which the new principal has not reached the authorization service.
   GRANTED=0
   for _ in 1 2 3 4; do
-    if az role assignment create --assignee-object-id "$PULL_PRINCIPAL_ID" \
-        --assignee-principal-type ServicePrincipal --role AcrPull --scope "$ACR_ID" -o none; then
+    if GRANT_ERR="$(az role assignment create --assignee-object-id "$PULL_PRINCIPAL_ID" \
+        --assignee-principal-type ServicePrincipal --role AcrPull --scope "$ACR_ID" -o none 2>&1)"; then
       GRANTED=1; break
     fi
+    # A missing privilege is not a propagation delay: retrying cannot fix it.
+    case "$GRANT_ERR" in
+      *AuthorizationFailed*|*"does not have authorization"*)
+        die "not allowed to grant AcrPull on $ACR: the az login principal needs Owner or User Access Administrator on the registry (only for this first grant). $GRANT_ERR" ;;
+    esac
     echo "   AcrPull grant not accepted yet (new identity still propagating); retrying in 15s"
     sleep 15
   done
@@ -275,6 +280,10 @@ az containerapp update -g "$RG" -n "$APP" --yaml "$SPEC" -o none
 # reporting success. Proving a pull under a configuration-only change is the
 # migration script's restart.
 echo "== waiting for the latest revision to become ready (up to 10 minutes)"
+# By the time this can fail, the update above has already replaced the app-level
+# registry config, so the previous revision is a fallback only until its replica next
+# starts and pulls under that config. Say so, and point at the recovery step.
+WAIT_FAILED_NOTE="The previous revision is still serving for now, but its next restart pulls with the same identity config. Re-run this script in a few minutes (AcrPull propagation), or restore the admin-credential pull: docs/AZURE_POC.md, 'If a deploy fails at the revision wait'."
 REV="$(az containerapp show -g "$RG" -n "$APP" --query properties.latestRevisionName -o tsv)"
 READY=""
 for _ in $(seq 1 60); do
@@ -282,10 +291,10 @@ for _ in $(seq 1 60); do
   [ "$READY" = "$REV" ] && break
   STATE="$(az containerapp revision show -g "$RG" -n "$APP" --revision "$REV" \
     --query properties.provisioningState -o tsv 2>/dev/null || true)"
-  [ "$STATE" = "Failed" ] && die "revision $REV failed to provision; the previous revision (${READY:-none}) is still serving. Inspect: az containerapp revision show -g $RG -n $APP --revision $REV"
+  [ "$STATE" = "Failed" ] && die "revision $REV failed to provision. $WAIT_FAILED_NOTE Inspect: az containerapp revision show -g $RG -n $APP --revision $REV"
   sleep 10
 done
-[ "$READY" = "$REV" ] || die "revision $REV was not ready after 10 minutes; the previous revision (${READY:-none}) is still serving"
+[ "$READY" = "$REV" ] || die "revision $REV was not ready after 10 minutes. $WAIT_FAILED_NOTE"
 echo "   ready: $REV"
 
 FQDN="$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
