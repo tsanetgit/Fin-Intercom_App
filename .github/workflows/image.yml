@@ -11,8 +11,9 @@
 # attested (SLSA build provenance, signed by this workflow and stored on GitHub), and
 # the deploy script deploys only a release-tag (vX.Y.Z) build: it verifies the
 # attestation names this workflow, the tag's ref and the tag's commit, then pins the
-# digest. Main, manual and other v* tag builds are attested too but never deployable;
-# the policy lives in the verifier. Tests are not run here: ci.yml runs them on the same commit; this
+# digest. Main builds, manual runs on a branch and other v* tag builds are attested
+# too but never deployable (a manual run on a release tag rebuilds that tag from the
+# same workflow and commit, and is deployable); the policy lives in the verifier. Tests are not run here: ci.yml runs them on the same commit; this
 # workflow only assembles and ships the artifact (-DskipTests).
 name: image
 on:

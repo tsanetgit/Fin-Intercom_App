@@ -60,6 +60,8 @@ before any tag can deploy: see "CI's push access, for a new registry" in
 
 Parameters override via env: `AZ_RG`, `AZ_LOCATION`, `AZ_ACR`, `AZ_APP`,
 `AZ_STORAGE`, `AZ_PULL_IDENTITY`, `AZ_ROLE_PROPAGATION_SECONDS` (default 120), `ENV_FILE`.
+`AZ_ACR` must match `env.ACR` in `.github/workflows/image.yml`, the only registry CI
+pushes release images to; the script refuses a mismatch.
 
 **One-time, after the first deploy that pulls by identity (#55):** retire the
 registry admin user.

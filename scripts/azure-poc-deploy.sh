@@ -39,7 +39,8 @@ REPO="$PWD"
 RG="${AZ_RG:-tsanet-fin-poc}"
 LOC="${AZ_LOCATION:-westus2}"
 # ACR names are GLOBALLY unique. Stable default keeps re-runs idempotent; if the
-# name is taken on a fresh setup, override with AZ_ACR=<yours>.
+# name is taken on a fresh setup, override with AZ_ACR=<yours> AND set image.yml's
+# env.ACR to the same name: CI pushes release images only there (checked below).
 ACR="${AZ_ACR:-tsanetfinpoc}"
 ACA_ENV="${AZ_ACA_ENV:-fin-poc-env}"
 APP="${AZ_APP:-fin-gateway-poc}"
@@ -60,12 +61,23 @@ trap cleanup EXIT
 [ "$#" -eq 1 ] || die "usage: $0 vX.Y.Z (a release tag whose image.yml run has finished)"
 TAG="$1"
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "'$TAG' is not a release tag of the form vX.Y.Z"
+# Release images exist only in the registry image.yml pushes to, so a deploy aimed at
+# any other registry could never find one. Refuse that up front, naming the fix.
+CI_ACR="$(sed -n 's/^  ACR: *//p' "$REPO/.github/workflows/image.yml")"
+[ -n "$CI_ACR" ] || die "could not read env.ACR from .github/workflows/image.yml"
+[ "$ACR" = "$CI_ACR" ] || die "this deploy targets registry $ACR, but image.yml pushes release images to $CI_ACR. Set image.yml's env.ACR to $ACR and give CI push access first (docs/AZURE_DEPLOYMENT.md, \"CI's push access, for a new registry\"), or unset AZ_ACR"
 
 command -v az >/dev/null || die "az CLI not installed (brew install azure-cli)"
 az account show >/dev/null 2>&1 || die "not logged in — run: az login"
 command -v gh >/dev/null || die "gh CLI not installed (brew install gh)"
-gh attestation verify --help 2>/dev/null | grep -q -- '--source-digest' \
-  || die "this gh has no 'attestation verify --source-digest'; upgrade it (brew upgrade gh)"
+# Captured, not piped into `grep -q`: under pipefail, grep -q exits at the first
+# match, gh takes SIGPIPE writing the rest of its help, and the pipeline fails on a gh
+# that is fine (the same trap scripts/run-local.sh documents).
+GH_VERIFY_HELP="$(gh attestation verify --help 2>/dev/null || true)"
+case "$GH_VERIFY_HELP" in
+  *--source-digest*) ;;
+  *) die "this gh has no 'attestation verify --source-digest'; upgrade it (brew upgrade gh)" ;;
+esac
 
 ENV_FILE="${ENV_FILE:-/Users/shawnray/code/tsanet-ops/.env}"
 [ -f "$ENV_FILE" ] || die "no .env at $ENV_FILE (set ENV_FILE=... to override)"
@@ -142,8 +154,8 @@ printf '{"auths":{"%s":{"auth":"%s"}}}' "$ACR.azurecr.io" \
   > "$REGCFG/config.json"
 unset ACR_TOKEN
 # Every condition is required: built by this repo's image.yml on a GitHub-hosted
-# runner, from this tag's ref, at this tag's commit. That refuses a main or manual
-# build, a build from another repo or workflow, and an image whose tag was moved to
+# runner, from this tag's ref, at this tag's commit. That refuses a main build or a
+# manual run on a branch, a build from another repo or workflow, and an image whose tag was moved to
 # another commit after it was built. The certificate's source digest is the commit
 # even for an annotated tag (checked on tsanetgit/Zendesk_App v1.0.71).
 VERIFIED="$(DOCKER_CONFIG="$REGCFG" gh attestation verify "oci://$IMAGE_REF" \

@@ -207,7 +207,9 @@ repository:
    refuses a tag whose commit is not on `main`, then refuses the registry's
    `fin-gateway:<tag>` image unless `gh attestation verify` confirms it was built by
    `image.yml` in this repository, from `refs/tags/<tag>`, at the tag's commit, on a
-   GitHub-hosted runner. Main and manual builds are attested but never deployable.
+   GitHub-hosted runner. Main builds and manual runs on a branch are attested but
+   never deployable. A manual run on a release tag rebuilds that tag's image from the
+   same workflow and commit, and is deployable like the tag push's own build.
 4. **Pin the digest.** The spec references `fin-gateway@sha256:...`, never a tag, so a
    later push under the same tag cannot change what runs. The app pulls it as the
    user-assigned identity `fin-gateway-poc-pull` (AcrPull only).
@@ -230,7 +232,9 @@ full verification.
 environment and signs in with the repository variables `AZURE_CLIENT_ID`,
 `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`. The Entra app they name needs AcrPush on
 the registry, and a federated credential with subject
-`repo:tsanetgit/Fin-Intercom_App:environment:acr`.
+`repo:tsanetgit/Fin-Intercom_App:environment:acr`. Set `env.ACR` in `image.yml` to the
+new registry's name too, and deploy with `AZ_ACR` set to the same name: the deploy
+script refuses a registry CI does not push to.
 
 Not yet covered: the registry admin user stays enabled until the other apps on the
 registry stop pulling with it (see the migration step in [AZURE_POC.md](AZURE_POC.md)),
