@@ -15,13 +15,14 @@
   <description>SDK-mode assembly: imports the published gateway-engine (docs/decisions.md D6; Fin swap #42) and packages the deployable.</description>
 
   <properties>
-    <!-- 2.0.0 = the engine on connect-library 2.0.0 (tsanetgit/Connect_Gateway#37,
-         released as v2.0.0). The TsanetGateway contract is unchanged from 1.0.0;
-         what moved is login handling: a failed login is a plain GatewayException,
-         never the ambiguous GatewayTimeoutException, and a stale token renews in
-         a login lane before the operation rather than inside its deadline. -->
-    <gateway-engine.version>2.0.0</gateway-engine.version>
-    <connect-library.version>2.0.0</connect-library.version>
+    <!-- 3.0.0 = the engine on connect-library 3.0.0 (tsanetgit/Connect_Gateway#47,
+         released as v3.0.0). The TsanetGateway contract and the engine's code are
+         unchanged from 2.0.0; the engine's version moves in step with the library
+         it pins. On the wire, a case create now also sends "encrypted": false and
+         "manifest": null, because connect-library 3.0.0's models are generated
+         from a newer Connect spec. -->
+    <gateway-engine.version>3.0.0</gateway-engine.version>
+    <connect-library.version>3.0.0</connect-library.version>
   </properties>
 
   <!-- Where the engine resolves from. GitHub Packages needs a token even for
@@ -52,8 +53,8 @@
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <!-- The published engine (tsanetgit/Connect_Gateway v2.0.0, on the Boot 4 /
-           Jackson 3 line from #34). Brings com.tsanet:connect-library 2.0.0
+      <!-- The published engine (tsanetgit/Connect_Gateway v3.0.0, on the Boot 4 /
+           Jackson 3 line from #34). Brings com.tsanet:connect-library 3.0.0
            transitively; this module carries no engine sources since the Fin swap (#42). -->
       <groupId>org.tsanet.connector</groupId>
       <artifactId>gateway-engine</artifactId>
