@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
 class FormFieldOptionBoundTest {
 
     private static FormField select(int optionCount) {
-        return select("Escalation Type", optionCount);
+        return select("Priority Path", optionCount);
     }
 
     private static FormField select(String label, int optionCount) {
@@ -77,12 +77,12 @@ class FormFieldOptionBoundTest {
         ProcessForm form = new ProcessForm("1042", null, null, List.of(
                 new FormField("88", "Serial Number", "STRING", true, "CONTACT_SECTION", List.of()),
                 select("Severity", 3),
-                select("Escalation Type", 12),
+                select("Priority Path", 12),
                 select("Product", 1)));
 
         List<FormField> violations = form.optionBoundViolations();
 
-        assertEquals(List.of("Escalation Type", "Product"),
+        assertEquals(List.of("Priority Path", "Product"),
                 violations.stream().map(FormField::label).toList());
         assertTrue(form.unsupportedFields().isEmpty(),
                 "an option-bound violation is not an unsupported TYPE — routing it into that"

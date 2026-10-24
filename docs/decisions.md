@@ -990,7 +990,7 @@ name/verdict/latency only), never persisted, never echoed.
 
 `tsanetgit/Fin-Intercom_App#45`. Response events (`response.created` /
 `response.updated`) drained and dropped until this slice — observed live 2026-08-11:
-Veritas accepted an outbound case, six events arrived in one second (five of them
+a partner accepted an outbound case, six events arrived in one second (five of them
 status-bearing), and the ticket showed nothing. `PartnerResponseHandler` surfaces the verdict as two writes: the
 ticket state moves per D17's mapping, and an admin note names the verdict
 ("<partner> accepted the TSANet case.").
@@ -1161,7 +1161,7 @@ the ticketless-verdict slice (D22), so a note can already reach a plain conversa
 **Residue:** two BETA cases, both left OPEN with `testCase=true` and neither deletable via the
 API (harness issue #21) — `<lifecycle-probe-token>` (`PROBE-NOACCEPT-*`, the lifecycle probe) and
 `<attribution-probe-token>` (`PROBE-ATTRIB-*`, the attribution follow-up); the real values are
-replaced with placeholders here. Both were **case
+replaced with placeholders here. Both are **case
 handles, not credentials**: they are the `token` field of a collaboration request, used as the
 path segment on `/v1/collaboration-requests/{token}`, and an unauthenticated GET against either
 the case or its notes returns 401. Notes carry their own `token` on the same pattern.
