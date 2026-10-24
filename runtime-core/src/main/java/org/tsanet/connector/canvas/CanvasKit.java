@@ -78,8 +78,8 @@ public final class CanvasKit {
      * Select-shaped fields render as a dropdown, NOT a single-select. A single-select lays
      * its options out as one horizontal row that neither wraps nor scales to the panel, so
      * past about three options every label clips to a few characters and the agent cannot
-     * read the choices before picking one — observed live on Dell | Global Support, whose
-     * 11-option Escalation Type rendered as "Compelle...", "Break...", "Comp..." (#7). A
+     * read the choices before picking one — observed live on a partner's process form,
+     * whose 11-option field rendered with every label clipped (#7). A
      * dropdown collapses the same options into a menu with no per-option horizontal budget.
      *
      * <p>The option structure and the {@code input_values} contract are identical between

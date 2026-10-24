@@ -23,7 +23,7 @@
     "FIRST REVIEW of this repository; no prior record. Full taxonomy walk at 7852f0b, advisor consulted adversarially once, its two blocking checks (log-token sensitivity, backup soft-delete) run and resolved before filing.",
     "MEDIUM #55: deployed image has no provenance chain (local build, ACR admin credential, tag not digest). A live member is on this deployment; fix or record a time-boxed acceptance.",
     "MEDIUM #56: CI packages credential is a classic repo-scope PAT inside a tag-pinned workflow with no permissions block.",
-    "MEDIUM #57: Intercom private-app token least-privilege is asserted to members but never verified against the live grant. Feeds the Anthropic security review directly.",
+    "MEDIUM #57: Intercom private-app token least-privilege is asserted to members but never verified against the live grant.",
     "MEDIUM #58: no dependency or base-image scanning (dependabot.yml verified absent). Carries a proposed taxonomy addition: Category 1 server-side dependency currency.",
     "MEDIUM #59: single overwritten backup copy; corruption propagates to the only recovery point within 5 minutes. Share-level soft delete (7d) verified live but covers deletion, not overwrites.",
     "SEVEN REGISTER ROWS seeded in SECURITY_REGISTER.md: credential inventory/rotation runbook (docs), PII/retention doc (docs), audit durability unverified (product), replay platform-gated with named compensating controls (product, accepted, review-by 2027-02-19), audit-line injection via partner strings (product), in-memory nonce restart window (product, accepted single-replica, review-by 2026-12-31), no mechanical check set (audit-tooling)."

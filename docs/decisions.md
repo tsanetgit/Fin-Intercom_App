@@ -148,10 +148,10 @@ The canvas flow was built against a failure-injectable FakeTsanetGateway whose
 fixtures mirror the Connect API contract, with an abstract gateway contract test that
 the SDK-backed gateway must also pass in slice 2; the fake refuses to start under the
 prod profile. Component shapes for input/textarea/dropdown follow the Canvas Kit
-reference. They were verified on a live workspace render 2026-08-05/06:
-Microsoft | Standard rendered input and textarea fields, Dell | Global Support
-rendered all 4 select fields, and `input_values` was observed on the wire
-(`{"q": "microsoft"}` on the search submit). The same check settled the formatting
+reference. They were verified on a live workspace render 2026-08-05/06: one
+partner's process form rendered input and textarea fields, another partner's form
+rendered all 4 of its select fields, and `input_values` was observed on the wire
+(`{"q": "<partner name>"}` on the search submit). The same check settled the formatting
 question: canvas text renders markdown links and bold only, never HTML. Partner
 notes arrive as partner-authored HTML and are converted to canvas markdown at the
 presentation boundary (#6), with literal and entity-encoded link syntax neutralized
@@ -159,8 +159,8 @@ so generated links are the only live link syntax.
 
 That render used `single-select` for select-shaped fields, and is what surfaced #7:
 single-select lays its options out as one horizontal row that neither wraps nor
-scales to the panel, so Dell's 8- and 11-option fields clipped every label to a few
-characters ("Compelle...", "Break...") and the agent could not read the choices
+scales to the panel, so that partner's 8- and 11-option fields clipped every label to
+a few characters and the agent could not read the choices
 before picking one. The data was never lost — the canvas JSON carried full option ids
 and labels on the wire — so the fix is the component, not the payload: select-shaped
 fields now emit `dropdown`, which collapses the options into a menu with no
@@ -172,7 +172,7 @@ this one still owes its render check.
 **The 2..11 option bound is detected, not enforced** (#49). Canvas Kit allows a select
 component a minimum of 2 options and a maximum of 11 — identical on `dropdown` and
 `single-select`, checked against the reference for each — and the connector renders
-the partner's options verbatim. Dell's Escalation Type sits at exactly 11, so one
+the partner's options verbatim. One partner's live form already has a field at exactly 11, so one
 option added by that partner puts a live form out of range, and the options are theirs
 to change without telling us.
 
@@ -990,7 +990,7 @@ name/verdict/latency only), never persisted, never echoed.
 
 `tsanetgit/Fin-Intercom_App#45`. Response events (`response.created` /
 `response.updated`) drained and dropped until this slice — observed live 2026-08-11:
-Veritas accepted an outbound case, six events arrived in one second (five of them
+a partner accepted an outbound case, six events arrived in one second (five of them
 status-bearing), and the ticket showed nothing. `PartnerResponseHandler` surfaces the verdict as two writes: the
 ticket state moves per D17's mapping, and an admin note names the verdict
 ("<partner> accepted the TSANet case.").
@@ -1052,7 +1052,7 @@ because the next slice would otherwise start from an assumption that is half wro
 Inbound lands every case on a ticket (D14), because the ticket carries the states, the
 attributes and the response panel. On this platform that fights the grain: Fin's premise is
 that a conversation is tried first and a ticket exists only once work escalates. For the
-Anthropic pilot — partner Microsoft, on MS Dynamics — the question is whether an inbound
+pilot member, whose partner is on the Dynamics connector, the question is whether an inbound
 collaboration can be **answered** and then **retired** without ever becoming a ticket.
 
 ### Measured live on BETA, 2026-08-14
@@ -1146,21 +1146,22 @@ the ticketless-verdict slice (D22), so a note can already reach a plain conversa
 
 ### Open, and deliberately not decided here
 
-- **Is ACCEPTED-as-bookkeeping honest across connectors?** If Anthropic accepts purely to make an
-  answered case closable, Microsoft's MS Dynamics UI still badges it "Accepted", which their
+- **Is ACCEPTED-as-bookkeeping honest across connectors?** If the pilot member accepts purely to make an
+  answered case closable, the partner's Dynamics connector UI still badges it "Accepted", which their
   engineer may read as "an engineer has been assigned". Two connectors disagreeing about what a
   state *means* is the divergence class the estate's unconverged list exists to prevent. Raise on
   `Member-Integrations`; do not answer locally.
 - **SLA authority** (unconverged): `respondBy` is create + 24h, and Fin consumes it before any
   human sees the case.
 - **Not probed:** whether REJECTED-after-notes behaves differently, what the SLA sweep does to a
-  case still OPEN at `respondBy`, and what Microsoft's record renders for each terminal state.
+  case still OPEN at `respondBy`, and what the partner's record renders for each terminal state.
   The last decides whether answer-then-accept-then-close *looks* right to the partner, and is the
   natural next probe.
 
 **Residue:** two BETA cases, both left OPEN with `testCase=true` and neither deletable via the
-API (harness issue #21) — `925704566d4141b5af` (`PROBE-NOACCEPT-*`, the lifecycle probe) and
-`138b35fecb194a20a1` (`PROBE-ATTRIB-*`, the attribution follow-up). Both values are **case
+API (harness issue #21) — `<lifecycle-probe-token>` (`PROBE-NOACCEPT-*`, the lifecycle probe) and
+`<attribution-probe-token>` (`PROBE-ATTRIB-*`, the attribution follow-up); the real values are
+replaced with placeholders here. Both are **case
 handles, not credentials**: they are the `token` field of a collaboration request, used as the
 path segment on `/v1/collaboration-requests/{token}`, and an unauthenticated GET against either
 the case or its notes returns 401. Notes carry their own `token` on the same pattern.

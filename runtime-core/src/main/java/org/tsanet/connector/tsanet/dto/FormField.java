@@ -46,7 +46,7 @@ public record FormField(String fieldId, String label, String type, boolean requi
      * Canvas Kit allows a select component a minimum of 2 options and a maximum of 11 —
      * the same bound on both {@code dropdown} and {@code single-select}, checked against
      * the reference for each. The options are the PARTNER's, editable without telling us,
-     * and Dell | Global Support's Escalation Type already sits at exactly 11.
+     * and one partner's live form already has a field at exactly 11.
      *
      * <p>Detection only, deliberately: what Intercom does when the bound is violated —
      * reject the whole canvas, drop the component, or render it anyway — is not yet
