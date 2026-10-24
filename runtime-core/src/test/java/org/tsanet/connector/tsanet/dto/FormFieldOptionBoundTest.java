@@ -33,8 +33,8 @@ class FormFieldOptionBoundTest {
     }
 
     @Test
-    void elevenOptionsIsInRangeBecauseThatIsWhatDellShipsToday() {
-        // Dell | Global Support's Escalation Type carries exactly 11 and renders. The
+    void elevenOptionsIsInRangeBecauseALivePartnerFormShipsEleven() {
+        // One partner's live form has a field with exactly 11 options, and it renders. The
         // cap is inclusive, and getting that off by one would flag a live partner form.
         assertFalse(select(11).optionCountOutOfRange());
     }
@@ -42,7 +42,7 @@ class FormFieldOptionBoundTest {
     @Test
     void twelveOptionsIsOutOfRange() {
         assertTrue(select(12).optionCountOutOfRange(),
-                "one option past Dell's current form is all it takes");
+                "one option past that partner's current form is all it takes");
     }
 
     @Test

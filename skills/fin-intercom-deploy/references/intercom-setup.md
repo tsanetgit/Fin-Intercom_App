@@ -71,8 +71,8 @@ a new Intercom API call is added: `POST/GET/PUT /tickets` + ticket search,
 
 ### The hardened profile (issue #65)
 
-For a workspace whose security review wants the standing grant surface minimized
-(Anthropic's did), three verified reductions stack on the default minimum. Which grant
+For a workspace whose security review wants the standing grant surface minimized,
+three verified reductions stack on the default minimum. Which grant
 gates what was probed live 2026-08-21 with a reduced-grant scratch app: ticket notes
 (`POST /tickets/{id}/reply`) ride **Write tickets** (200 under a tickets-only token),
 and only the conversation-reply endpoint needs **Write conversations** (401 under the
