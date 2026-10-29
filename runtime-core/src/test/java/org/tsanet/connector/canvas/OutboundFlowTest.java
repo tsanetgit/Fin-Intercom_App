@@ -331,6 +331,19 @@ class OutboundFlowTest {
     }
 
     @Test
+    void theDraftNamesTheSelectedPartnersCompany() throws Exception {
+        // tsanetgit/Fin-Intercom_App#103: the engine picks the partner's encryption key
+        // from this, so it must be the company whose form is being submitted.
+        String flow = flowId(initialize());
+        submit(flow, "search", "{\"q\":\"netapp\"}");
+        submit(flow, "select:1042|512", "{}");
+        JsonNode confirmed = submit(flow, "submit_case",
+                "{\"summary\":\"s\",\"description\":\"d\",\"f_88\":\"SN-7\",\"f_89\":\"High\"}");
+        assertTrue(allText(confirmed).contains("Case submitted"), allText(confirmed));
+        assertEquals("1042", gateway.lastDraft().partnerCompanyId());
+    }
+
+    @Test
     void staleSelectionKeyReRendersCurrentResults() throws Exception {
         // Selection is by partner identity, not list index: a key absent from the
         // CURRENT results (stale canvas in another view, or a fabricated id) must

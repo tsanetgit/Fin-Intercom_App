@@ -841,7 +841,12 @@ public class CanvasController {
                 state.values().get("description"),
                 fieldValues,
                 name == null ? "" : name,
-                email == null ? "" : email);
+                email == null ? "" : email,
+                // The partner whose form this is: select sets the two as a pair under the
+                // flow monitor, and doSubmit builds the draft inside it. The engine needs it
+                // to pick the partner's encryption key (tsanetgit/Connect_Gateway#51); one
+                // without end-to-end encryption ignores it.
+                state.partner().companyId());
     }
 
     /**
