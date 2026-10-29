@@ -25,19 +25,27 @@ import org.junit.jupiter.api.Test;
  * runtime-core carries its own copy of the gateway contract ({@code org.tsanet.connector.tsanet}),
  * and on this module's classpath that copy loads ahead of {@code connector-core}, which arrives
  * with gateway-engine. The engine is compiled against connector-core, so a member it uses that
- * the copy lacks fails at runtime, as {@code NoSuchMethodError} or {@code AbstractMethodError}
- * (tsanetgit/Fin-Intercom_App#103). This test compares the two copies of every contract type
- * runtime-core holds, each loaded in isolation from its own classpath root, against the
- * connector-core gateway-engine actually brings:
+ * the copy lacks fails at runtime, as {@code NoSuchMethodError}, {@code NoSuchFieldError} or
+ * {@code AbstractMethodError} (tsanetgit/Fin-Intercom_App#103). This test compares the two
+ * copies of every contract type runtime-core holds, nested types such as an enum included, each
+ * loaded in isolation from its own classpath root, against the connector-core gateway-engine
+ * actually brings:
  * <ul>
- *   <li>a class or record in the copy must have every public constructor and method
- *       connector-core's has (the engine constructs and reads them), and the same superclass;</li>
+ *   <li>a class, record or enum in the copy must have every public constructor, method and
+ *       field connector-core's has (the engine constructs and reads them, and an enum's
+ *       constants are its public fields), and the same superclass;</li>
  *   <li>an interface in the copy may declare only abstract methods connector-core's also
  *       declares (the engine implements connector-core's, so any other abstract method would be
  *       unimplemented; a default method is inherited, so it can't fail).</li>
  * </ul>
  * Extra members in a class, and connector-core types the copy doesn't hold, are fine: the copy
  * may run ahead of the pinned engine, and a type it doesn't hold loads from connector-core.
+ *
+ * <p>The interface rule is one-way on purpose. A method connector-core's interface has and the
+ * copy lacks (today {@code forwardAttachments}) fails only if something calls it through the
+ * interface; neither this adapter nor connector-core or gateway-engine does (a grep of their
+ * {@code src/main} finds only the declaration and the engine's implementation). Calling one
+ * would need the copy to catch up first, which this test would then hold.
  */
 class ContractCopyParityTest {
 
@@ -76,12 +84,21 @@ class ContractCopyParityTest {
         }
         // A vacuous pass would hide drift: make sure the comparison really ran.
         assertThat(compared).contains("org.tsanet.connector.tsanet.dto.SubmissionDraft",
-                "org.tsanet.connector.tsanet.TsanetGateway", "org.tsanet.connector.tsanet.GatewayException");
+                "org.tsanet.connector.tsanet.TsanetGateway", "org.tsanet.connector.tsanet.GatewayException",
+                "org.tsanet.connector.tsanet.dto.InboundCase$Status");
         assertThat(problems).as("runtime-core's contract copy against connector-core (" + compared.size()
                 + " types compared)").isEmpty();
     }
 
-    /** Public constructors and methods, as "name(param types)return type". */
+    @Test
+    void anEnumsConstantsAreAmongWhatIsCompared() {
+        // Fin references every Status constant, so removing one from the copy can't be
+        // probed without breaking compilation; this pins that constants are compared at all.
+        assertThat(signatures(org.tsanet.connector.tsanet.dto.InboundCase.Status.class))
+                .contains("field PENDINGACTION:org.tsanet.connector.tsanet.dto.InboundCase$Status");
+    }
+
+    /** Public constructors, methods and fields, as "name(param types)return type" and "field name:type". */
     private static Set<String> signatures(Class<?> type) {
         Stream<String> constructors = Arrays.stream(type.getDeclaredConstructors())
                 .filter(c -> Modifier.isPublic(c.getModifiers()))
@@ -89,7 +106,11 @@ class ContractCopyParityTest {
         Stream<String> methods = Arrays.stream(type.getDeclaredMethods())
                 .filter(m -> Modifier.isPublic(m.getModifiers()) && !m.isSynthetic())
                 .map(ContractCopyParityTest::signature);
-        return Stream.concat(constructors, methods).collect(Collectors.toCollection(TreeSet::new));
+        Stream<String> fields = Arrays.stream(type.getDeclaredFields())
+                .filter(f -> Modifier.isPublic(f.getModifiers()) && !f.isSynthetic())
+                .map(f -> "field " + f.getName() + ":" + f.getType().getName());
+        return Stream.of(constructors, methods, fields).flatMap(s -> s)
+                .collect(Collectors.toCollection(TreeSet::new));
     }
 
     /** An interface's abstract methods, the ones an implementation must supply. */
@@ -154,7 +175,9 @@ class ContractCopyParityTest {
             Path dir = base.resolve(PACKAGE_PATH);
             try (Stream<Path> files = Files.walk(dir)) {
                 return files.map(p -> base.relativize(p).toString().replace('\\', '/'))
-                        .filter(p -> p.endsWith(".class") && !p.contains("$"))
+                        // Nested types count (InboundCase's Direction and Status enums);
+                        // anonymous classes ($1, $2) are implementation, not contract.
+                        .filter(p -> p.endsWith(".class") && !p.matches(".*\\$[0-9]+.*"))
                         .map(p -> p.substring(0, p.length() - ".class".length()).replace('/', '.'))
                         .sorted()
                         .toList();
