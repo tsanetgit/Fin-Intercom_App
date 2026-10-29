@@ -34,28 +34,39 @@ import org.junit.jupiter.api.Test;
  *   <li>a class, record or enum in the copy must have every public constructor, method and
  *       field connector-core's has (the engine constructs and reads them, and an enum's
  *       constants are its public fields), and the same superclass;</li>
- *   <li>an interface in the copy may declare only abstract methods connector-core's also
- *       declares (the engine implements connector-core's, so any other abstract method would be
- *       unimplemented; a default method is inherited, so it can't fail).</li>
+ *   <li>an interface in the copy is held both ways. Each abstract method it declares must be
+ *       abstract in connector-core's too (the engine implements connector-core's, so an abstract
+ *       method connector-core has as a default, or lacks, would be unimplemented). And it must
+ *       have every public method connector-core's has (engine code compiled against
+ *       connector-core can call any of them through the interface), apart from those listed in
+ *       {@link #OMITTED_ON_PURPOSE};</li>
+ *   <li>a type is the same kind in both copies (interface, enum, record or class).</li>
  * </ul>
  * Extra members in a class, and connector-core types the copy doesn't hold, are fine: the copy
  * may run ahead of the pinned engine, and a type it doesn't hold loads from connector-core.
- *
- * <p>The interface rule is one-way on purpose. A method connector-core's interface has and the
- * copy lacks (today {@code forwardAttachments}) fails only if something calls it through the
- * interface; neither this adapter nor connector-core or gateway-engine does (a grep of their
- * {@code src/main} finds only the declaration and the engine's implementation). Calling one
- * would need the copy to catch up first, which this test would then hold.
  */
 class ContractCopyParityTest {
 
     private static final String PACKAGE_PATH = "org/tsanet/connector/tsanet/";
 
+    /**
+     * connector-core interface methods the copy leaves out on purpose. Each is safe only while
+     * nothing calls it through the interface: today a grep of Fin's, connector-core's and
+     * gateway-engine's {@code src/main} finds only the declaration and the engine's
+     * implementation. A new method in connector-core's interface fails this test at the engine
+     * bump, so someone decides whether the copy catches up or the method joins this list.
+     */
+    private static final Set<String> OMITTED_ON_PURPOSE = Set.of(
+            "org.tsanet.connector.tsanet.TsanetGateway#forwardAttachments(java.lang.String,java.lang.String,"
+                    + "java.util.List)java.util.List");
+
     @Test
     void runtimeCoresContractCopyProvidesWhatTheEngineUses() throws Exception {
         Path copyRoot = rootOf("runtime-core");
         Path coreRoot = rootOf("connector-core");
+        assertThat(copyRoot).as("the two copies must come from different roots").isNotEqualTo(coreRoot);
         List<String> compared = new ArrayList<>();
+        Set<String> omitted = new TreeSet<>();
         List<String> problems = new ArrayList<>();
         try (Classes copy = new Classes(copyRoot); Classes core = new Classes(coreRoot)) {
             for (String name : copy.contractClassNames()) {
@@ -65,11 +76,26 @@ class ContractCopyParityTest {
                 compared.add(name);
                 Class<?> mine = copy.load(name);
                 Class<?> theirs = core.load(name);
+                if (mine.isInterface() != theirs.isInterface() || mine.isEnum() != theirs.isEnum()
+                        || mine.isRecord() != theirs.isRecord()) {
+                    problems.add(name + " is a different kind of type in the copy than in connector-core");
+                    continue;
+                }
                 if (theirs.isInterface()) {
-                    Set<String> missing = new TreeSet<>(abstractSignatures(mine));
-                    missing.removeAll(signatures(theirs));
-                    missing.forEach(m -> problems.add(name + " declares " + m
-                            + ", which connector-core's interface lacks, so the engine doesn't implement it"));
+                    Set<String> unimplemented = new TreeSet<>(abstractSignatures(mine));
+                    unimplemented.removeAll(abstractSignatures(theirs));
+                    unimplemented.forEach(m -> problems.add(name + " declares abstract " + m
+                            + ", which connector-core's interface doesn't, so the engine needn't implement it"));
+                    Set<String> missing = new TreeSet<>(signatures(theirs));
+                    missing.removeAll(signatures(mine));
+                    for (String m : missing) {
+                        if (OMITTED_ON_PURPOSE.contains(name + "#" + m)) {
+                            omitted.add(name + "#" + m);
+                        } else {
+                            problems.add(name + " lacks " + m + ", which connector-core's interface has and engine"
+                                    + " code may call; add it to the copy, or to OMITTED_ON_PURPOSE if nothing does");
+                        }
+                    }
                 } else {
                     Set<String> missing = new TreeSet<>(signatures(theirs));
                     missing.removeAll(signatures(mine));
@@ -88,6 +114,9 @@ class ContractCopyParityTest {
                 "org.tsanet.connector.tsanet.dto.InboundCase$Status");
         assertThat(problems).as("runtime-core's contract copy against connector-core (" + compared.size()
                 + " types compared)").isEmpty();
+        // The list stays honest: an entry that is no longer omitted, or no longer exists, goes.
+        assertThat(omitted).as("OMITTED_ON_PURPOSE entries that no longer apply")
+                .containsExactlyInAnyOrderElementsOf(OMITTED_ON_PURPOSE);
     }
 
     @Test
@@ -95,7 +124,7 @@ class ContractCopyParityTest {
         // Fin references every Status constant, so removing one from the copy can't be
         // probed without breaking compilation; this pins that constants are compared at all.
         assertThat(signatures(org.tsanet.connector.tsanet.dto.InboundCase.Status.class))
-                .contains("field PENDINGACTION:org.tsanet.connector.tsanet.dto.InboundCase$Status");
+                .contains("static field PENDINGACTION:org.tsanet.connector.tsanet.dto.InboundCase$Status");
     }
 
     /** Public constructors, methods and fields, as "name(param types)return type" and "field name:type". */
@@ -108,7 +137,8 @@ class ContractCopyParityTest {
                 .map(ContractCopyParityTest::signature);
         Stream<String> fields = Arrays.stream(type.getDeclaredFields())
                 .filter(f -> Modifier.isPublic(f.getModifiers()) && !f.isSynthetic())
-                .map(f -> "field " + f.getName() + ":" + f.getType().getName());
+                .map(f -> (Modifier.isStatic(f.getModifiers()) ? "static " : "") + "field " + f.getName() + ":"
+                        + f.getType().getName());
         return Stream.of(constructors, methods, fields).flatMap(s -> s)
                 .collect(Collectors.toCollection(TreeSet::new));
     }
@@ -126,7 +156,8 @@ class ContractCopyParityTest {
     }
 
     private static String signature(Method m) {
-        return m.getName() + "(" + names(m.getParameterTypes()) + ")" + m.getReturnType().getName();
+        return (Modifier.isStatic(m.getModifiers()) ? "static " : "") + m.getName() + "("
+                + names(m.getParameterTypes()) + ")" + m.getReturnType().getName();
     }
 
     private static String names(Class<?>[] types) {
@@ -134,8 +165,10 @@ class ContractCopyParityTest {
     }
 
     /**
-     * The classpath root (a directory or a jar) holding the contract package for the module
-     * whose path names it: runtime-core's classes or jar, or the connector-core jar.
+     * The classpath root holding the contract package for one module: its jar
+     * ({@code <module>-<version>.jar}) or its build output ({@code <module>/target/classes}). Matched
+     * on the root's own name, never on the whole path, so a checkout whose path happens to
+     * contain the other module's name can't resolve both copies to one root.
      */
     private static Path rootOf(String module) throws Exception {
         List<URL> found = new ArrayList<>();
@@ -143,15 +176,20 @@ class ContractCopyParityTest {
                 .asIterator().forEachRemaining(found::add);
         for (URL url : found) {
             String s = url.toString();
-            if (!s.contains(module)) {
+            Path root;
+            if (s.startsWith("jar:")) {
+                root = Path.of(new java.net.URI(s.substring(4, s.indexOf("!/"))));
+                if (root.getFileName().toString().startsWith(module + "-")) {
+                    return root;
+                }
                 continue;
             }
-            if (s.startsWith("jar:")) {
-                return Path.of(new java.net.URI(s.substring(4, s.indexOf("!/"))));
-            }
             Path classFile = Path.of(url.toURI());
-            return classFile.getRoot().resolve(classFile.subpath(0,
+            root = classFile.getRoot().resolve(classFile.subpath(0,
                     classFile.getNameCount() - PACKAGE_PATH.split("/").length - 1));
+            if (root.endsWith(Path.of(module, "target", "classes"))) {
+                return root;
+            }
         }
         throw new AssertionError("no " + module + " copy of the contract on the test classpath: " + found);
     }
