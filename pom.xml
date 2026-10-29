@@ -9,7 +9,7 @@
     <artifactId>spring-boot-starter-parent</artifactId>
     <!-- 4.1 is the current OSS-supported Spring Boot line (3.x is fully EOL;
          see tsanetgit/Fin-Intercom_App#76 for the estate migration this is part of). -->
-    <version>4.1.1</version>
+    <version>4.1.2</version>
     <relativePath/>
   </parent>
 
