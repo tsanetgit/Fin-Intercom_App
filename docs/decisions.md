@@ -126,9 +126,12 @@ on every PR. The verbatim-SDK rule above is unaffected.
 `main` (`shawn-tsanet/connect-sdk-demo` repointed in `shawn-tsanet/connect-sdk-demo#9`).
 The verbatim, no-fork rule and the vendored-spec mechanics (D11) are unchanged.
 
-**UPDATED 2026-11-03:** the vendored copy is removed (D11, updated the same day). Nothing
-here builds `connect-library` from source any more, so this repository needs no spec at all;
-the verbatim, no-fork rule stands.
+**UPDATED 2026-11-03:** the vendored copy is removed (D11, updated the same day), so the
+"no sibling checkout and no credential" sentence above no longer describes the build. Nothing
+here builds `connect-library` from source any more and this repository needs no spec at all;
+the `sdk` build resolves the published `gateway-engine` and `connect-library` from GitHub
+Packages, which does need a packages-read credential (README, CI). The verbatim, no-fork
+rule stands.
 
 ## D7. Skeleton non-goals
 
@@ -330,13 +333,17 @@ reproducibility, and the SDK modules are still consumed verbatim from upstream.
 (`tsanetgit/Fin-Intercom_App#97`). Since the Fin swap (#42, 2026-08-11) the build consumes
 the published `gateway-engine` and `connect-library` artifacts, pinned to one version (the
 `enforce-connect-library-pin` enforcer rule in `connect-gateway/pom.xml` fails the build when
-the two pins differ), so nothing in this repository ran codegen against the copy, and by
+the adapter's direct `connect-library` pin and the version `gateway-engine` requests differ), so nothing in this repository ran codegen against the copy, and by
 removal it had fallen behind the production 3.2.5 spec (`diff` of the two files: 1916 lines
 marked `<` or `>`). The drift control moves with the consumer: `tsanet-ops` snapshots the
 upstream spec per branch into `tsanet_ops.api_spec_snapshots`, and nothing in this
 repository is compared against it any more; this adapter's only exposure to the transport
 contract is the `connect-library` version it pins, so a contract change reaches it as a
-version bump. Two things do not change: the file stays in git history, so
+version bump. Of the controls listed above, three retire with the file: the sidecar provenance
+README, the hash drift check against it, and the matched pair with the demo ref (the demo
+checkout itself left with #42). And "with no secret at all" no longer holds: the `sdk` job
+needs `PACKAGES_READ_TOKEN` to resolve the published artifacts and fails at its first step
+without it (`ci.yml`). Two things do not change: the file stays in git history, so
 the visibility rule above still binds and this repository is not made public without
 upstream sign-off; and the verbatim-SDK rule.
 
