@@ -8,10 +8,12 @@
 # subjects would need one credential per ref.
 #
 # Tags produced: sha-<short> always; the git tag name on tag builds. Every pushed
-# image is then scanned (#58): a fixable CRITICAL or HIGH vulnerability in the base
-# image's OS packages or in the jar's Java dependencies fails the job before the
-# attestation step, so such a build is never deployable. Every build that passes
-# the scan is attested (SLSA build provenance, signed by this workflow and stored
+# image is then scanned (#58, since 2026-11-04): a fixable CRITICAL or HIGH
+# vulnerability in the base image's OS packages or in the jar's Java dependencies
+# fails the job before the attestation step, so such a build is never deployable.
+# Release tags attested before the scan existed (v0.1.0 to v0.3.0) stay deployable;
+# v0.3.0 was scanned by hand when the scan landed and was clean. Every build that
+# passes the scan is attested (SLSA build provenance, signed by this workflow and stored
 # on GitHub), and the deploy script deploys only a release-tag (vX.Y.Z) build: it
 # verifies the attestation names this workflow, the tag's ref and the tag's commit,
 # then pins the digest. Main builds, manual runs on a branch and other v* tag builds
@@ -175,7 +177,9 @@ jobs:
         # nothing in this repo can remedy them. Trivy resolves the digest from the
         # local daemon (docker records RepoDigests on push), so no pull. Baseline
         # when this landed (2026-11-04): zero fixable CRITICAL/HIGH on a fresh main
-        # build and on v0.3.0.
+        # build and on v0.3.0. A DB download failure or a timeout also exits
+        # non-zero and lands here the same way; the log says which, and the remedy
+        # for those is a re-run of the job, not a change.
         env:
           IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
         run: |
