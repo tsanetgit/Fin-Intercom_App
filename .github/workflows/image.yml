@@ -126,7 +126,7 @@ jobs:
             echo '```'
             # Same tag form the deploy script accepts.
             if [ "${GITHUB_REF_TYPE}" = "tag" ] && [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Deploy it, once the scan and attestation steps below have finished, with: scripts/azure-poc-deploy.sh ${GITHUB_REF_NAME}"
+              echo "Deploy it, once the scan and attestation steps below have succeeded, with: scripts/azure-poc-deploy.sh ${GITHUB_REF_NAME}"
             else
               echo "Not deployable: the deploy script takes only release-tag (vX.Y.Z) builds."
             fi
@@ -141,6 +141,8 @@ jobs:
         # nothing in this repo can remedy them. The scan resolves the digest from
         # the local daemon (docker records RepoDigests on push), so no pull. Trivy's
         # vulnerability DBs come from its default mirrors; no credential is needed.
+        # The scanner version is pinned (version:) so the gate is reproducible;
+        # bump it with the action, not on its own.
         # Baseline when this landed (2026-11-04): zero fixable CRITICAL/HIGH on a
         # fresh main build and on v0.3.0.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -152,6 +154,7 @@ jobs:
           exit-code: "1"
           format: table
           timeout: 10m
+          version: v0.70.0
       - name: Attest build provenance
         # No push-to-registry: the deploy script verifies with gh, which reads the
         # attestation from GitHub, so a registry copy would have no consumer.
