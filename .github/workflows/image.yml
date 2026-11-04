@@ -7,14 +7,24 @@
 # dispatch: Entra federated credentials match subjects exactly, and per-ref
 # subjects would need one credential per ref.
 #
-# Tags produced: sha-<short> always; the git tag name on tag builds. Every build is
-# attested (SLSA build provenance, signed by this workflow and stored on GitHub), and
-# the deploy script deploys only a release-tag (vX.Y.Z) build: it verifies the
-# attestation names this workflow, the tag's ref and the tag's commit, then pins the
-# digest. Main builds, manual runs on a branch and other v* tag builds are attested
-# too but never deployable (a manual run on a release tag rebuilds that tag from the
-# same workflow and commit, and is deployable); the policy lives in the verifier. Tests are not run here: ci.yml runs them on the same commit; this
-# workflow only assembles and ships the artifact (-DskipTests).
+# Tags produced: sha-<short> always; the git tag name on tag builds. Every pushed
+# image built from a commit that carries the scan step below (#58) is then scanned: a
+# fixable CRITICAL or HIGH vulnerability in the base image's OS packages or Go
+# binaries, or in the jar's Java dependencies fails the job before the attestation
+# step, so such a build is never deployable. Release tags attested before the step
+# existed (v0.1.0 to v0.3.0) stay deployable, and a manual rebuild of one of them runs
+# that tag's own workflow file, so it is attested unscanned; v0.3.0 was scanned by
+# hand when the step landed and was clean. The scan is a gate at build time: a build
+# is scanned once, and a CVE disclosed after its attestation does not revoke it; re-
+# scanning attested images is not this workflow's job. Every build that passes the
+# scan is attested (SLSA build provenance, signed by this workflow and stored on
+# GitHub), and the deploy script deploys only a release-tag (vX.Y.Z) build: it
+# verifies the attestation names this workflow, the tag's ref and the tag's commit,
+# then pins the digest. Main builds, manual runs on a branch and other v* tag builds
+# are attested too but never deployable (a manual run on a release tag rebuilds that
+# tag from the same workflow and commit, and is deployable); the policy lives in the
+# verifier. Tests are not run here: ci.yml runs them on the same commit; this workflow
+# only assembles and ships the artifact (-DskipTests).
 name: image
 on:
   push:
@@ -83,6 +93,40 @@ jobs:
           JAR="$1"
           unzip -l "$JAR" | grep -q "BOOT-INF/lib/gateway-engine-" \
             || { echo "::error::$JAR carries no gateway-engine artifact — wrong jar or a pre-swap build"; exit 1; }
+      - name: Install Trivy
+        # Pinned by version and by the SHA-256 of the release tarball, fetched from the
+        # GitHub release and checked before anything runs; a mismatch fails the job
+        # here, before the image is built or pushed. The project's own installer (aquasecurity/setup-trivy, which
+        # aquasecurity/trivy-action wraps) downloads from get.trivy.dev, which stopped
+        # resolving on 2026-11-03 (aquasecurity/setup-trivy#42), and a wrapper action
+        # would also run third-party composite steps inside this job, which holds the
+        # OIDC signing identity and an AcrPush session. A hash-pinned binary is the
+        # smaller trust. Bump TRIVY_VERSION and TRIVY_SHA256 together, from
+        # trivy_<version>_checksums.txt on the release.
+        env:
+          TRIVY_VERSION: 0.70.0
+          TRIVY_SHA256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/trivy.tgz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  /tmp/trivy.tgz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/trivy.tgz -C "$HOME/.local/bin" trivy
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/trivy" --version
+      - name: Cache key for the Trivy databases
+        id: today
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - name: Cache the Trivy vulnerability databases
+        # trivy-db (~130 MB) and trivy-java-db (~950 MB) come from Trivy's default
+        # mirrors with no credential. One cache entry per day; trivy refreshes a
+        # stale DB on its own, so a restore from an older day still works.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ steps.today.outputs.date }}
+          restore-keys: trivy-db-
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -122,11 +166,33 @@ jobs:
             echo '```'
             # Same tag form the deploy script accepts.
             if [ "${GITHUB_REF_TYPE}" = "tag" ] && [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Deploy it, once the attestation step below has finished, with: scripts/azure-poc-deploy.sh ${GITHUB_REF_NAME}"
+              echo "Deploy it, once the scan and attestation steps below have succeeded, with: scripts/azure-poc-deploy.sh ${GITHUB_REF_NAME}"
             else
               echo "Not deployable: the deploy script takes only release-tag (vX.Y.Z) builds."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Scan the image for fixable CRITICAL and HIGH vulnerabilities
+        # #58 box 2. Scans the image just pushed, by the same repo@digest the
+        # attestation names: the base image's OS packages (ubuntu, from
+        # eclipse-temurin:21-jre), any Go binaries the base image ships (usr/bin/pebble
+        # today) and the Java dependencies nested in /app.jar. A
+        # fixable CRITICAL or HIGH fails this step, so the attestation below never
+        # runs and the deploy script refuses the build; the image stays in the
+        # registry for triage. Unfixed findings are excluded (--ignore-unfixed):
+        # nothing in this repo can remedy them. Trivy resolves the digest from the
+        # local daemon (docker records RepoDigests on push), so no pull. Baseline
+        # when this landed (2026-11-04): zero fixable CRITICAL/HIGH on a fresh main
+        # build and on v0.3.0. A DB download failure or Trivy's own --timeout also
+        # exits non-zero and lands here the same way; the log says which, and the
+        # remedy for those is a re-run of the job, not a change. (The job's
+        # timeout-minutes cancels the job instead; the gate holds either way, since
+        # nothing is attested.)
+        env:
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed \
+            --exit-code 1 --format table --timeout 10m "$IMAGE_DIGEST"
       - name: Attest build provenance
         # No push-to-registry: the deploy script verifies with gh, which reads the
         # attestation from GitHub, so a registry copy would have no consumer.
