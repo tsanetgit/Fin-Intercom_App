@@ -38,7 +38,8 @@ from `tsanetgit/Connect_SDK`. GitHub Packages requires a token even for reads, s
 </servers></settings>
 ```
 
-The PAT needs `read:packages`, plus `repo` while the source repos are private. No
+The PAT must be a classic one with `read:packages`; the Maven registry accepts no
+fine-grained tokens, and `repo` scope is not needed. No
 sibling checkout, no codegen, and no `Connect-API-Code` access are involved. CI does
 the same thing with the `PACKAGES_READ_TOKEN` secret.
 
@@ -70,6 +71,18 @@ and `sdk` fails at its first step when the token is missing instead of skipping.
 previously gated on `CONNECT_API_CODE_TOKEN` for a private checkout; that secret was
 never configured, so the job skipped every real step while reporting success — the
 gateway tests had never run in CI.
+
+`PACKAGES_READ_TOKEN` is a classic PAT owned by `shawn-tsanet`, with `read:packages` and
+no other scope. It has three consumers: the `sdk` job here, the `-Psdk` build in
+`image.yml`, and Dependabot (the registries in `dependabot.yml`, and CI on the PRs it
+opens), which reads its own copy from the Dependabot secret store. The token expires;
+the current expiry date is recorded on
+[#56](https://github.com/tsanetgit/Fin-Intercom_App/issues/56). To rotate it,
+regenerate it as a classic PAT with `read:packages` only, set it in both the Actions and
+the Dependabot secret stores, and run `ci` on `main` (`gh workflow run ci.yml --ref main`);
+the `sdk` job must pass. That proves the token: the Maven cache `sdk` restores is the one
+`core` saved (`core` finishes first, and `sdk` needs it), which holds none of the private
+packages, so `sdk` fetches them from GitHub Packages with the token.
 
 ## Status
 
