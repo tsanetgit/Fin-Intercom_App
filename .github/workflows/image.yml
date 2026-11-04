@@ -9,20 +9,22 @@
 #
 # Tags produced: sha-<short> always; the git tag name on tag builds. Every pushed
 # image built from a commit that carries the scan step below (#58) is then scanned: a
-# fixable CRITICAL or HIGH vulnerability in the base image's OS packages or in the
-# jar's Java dependencies fails the job before the attestation step, so such a build
-# is never deployable. Release tags attested before the step existed (v0.1.0 to
-# v0.3.0) stay deployable, and a manual rebuild of one of them runs that tag's own
-# workflow file, so it is attested unscanned; v0.3.0 was scanned by hand when the step
-# landed and was clean. Every build that passes the scan is attested (SLSA build
-# provenance, signed by this workflow and stored on GitHub), and the deploy script
-# deploys only a release-tag (vX.Y.Z) build: it verifies the attestation names this
-# workflow, the tag's ref and the tag's commit, then pins the digest. Main builds,
-# manual runs on a branch and other v* tag builds are attested too but never
-# deployable (a manual run on a release tag rebuilds that tag from the same workflow
-# and commit, and is deployable); the policy lives in the verifier. Tests are not run
-# here: ci.yml runs them on the same commit; this workflow only assembles and ships
-# the artifact (-DskipTests).
+# fixable CRITICAL or HIGH vulnerability in the base image's OS packages or Go
+# binaries, or in the jar's Java dependencies fails the job before the attestation
+# step, so such a build is never deployable. Release tags attested before the step
+# existed (v0.1.0 to v0.3.0) stay deployable, and a manual rebuild of one of them runs
+# that tag's own workflow file, so it is attested unscanned; v0.3.0 was scanned by
+# hand when the step landed and was clean. The scan is a gate at build time: a build
+# is scanned once, and a CVE disclosed after its attestation does not revoke it; re-
+# scanning attested images is not this workflow's job. Every build that passes the
+# scan is attested (SLSA build provenance, signed by this workflow and stored on
+# GitHub), and the deploy script deploys only a release-tag (vX.Y.Z) build: it
+# verifies the attestation names this workflow, the tag's ref and the tag's commit,
+# then pins the digest. Main builds, manual runs on a branch and other v* tag builds
+# are attested too but never deployable (a manual run on a release tag rebuilds that
+# tag from the same workflow and commit, and is deployable); the policy lives in the
+# verifier. Tests are not run here: ci.yml runs them on the same commit; this workflow
+# only assembles and ships the artifact (-DskipTests).
 name: image
 on:
   push:
@@ -172,7 +174,8 @@ jobs:
       - name: Scan the image for fixable CRITICAL and HIGH vulnerabilities
         # #58 box 2. Scans the image just pushed, by the same repo@digest the
         # attestation names: the base image's OS packages (ubuntu, from
-        # eclipse-temurin:21-jre) and the Java dependencies nested in /app.jar. A
+        # eclipse-temurin:21-jre), any Go binaries the base image ships (usr/bin/pebble
+        # today) and the Java dependencies nested in /app.jar. A
         # fixable CRITICAL or HIGH fails this step, so the attestation below never
         # runs and the deploy script refuses the build; the image stays in the
         # registry for triage. Unfixed findings are excluded (--ignore-unfixed):
