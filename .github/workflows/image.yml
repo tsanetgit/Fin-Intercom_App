@@ -7,13 +7,17 @@
 # dispatch: Entra federated credentials match subjects exactly, and per-ref
 # subjects would need one credential per ref.
 #
-# Tags produced: sha-<short> always; the git tag name on tag builds. Every build is
-# attested (SLSA build provenance, signed by this workflow and stored on GitHub), and
-# the deploy script deploys only a release-tag (vX.Y.Z) build: it verifies the
-# attestation names this workflow, the tag's ref and the tag's commit, then pins the
-# digest. Main builds, manual runs on a branch and other v* tag builds are attested
-# too but never deployable (a manual run on a release tag rebuilds that tag from the
-# same workflow and commit, and is deployable); the policy lives in the verifier. Tests are not run here: ci.yml runs them on the same commit; this
+# Tags produced: sha-<short> always; the git tag name on tag builds. Every pushed
+# image is then scanned (#58): a fixable CRITICAL or HIGH vulnerability in the base
+# image's OS packages or in the jar's Java dependencies fails the job before the
+# attestation step, so such a build is never deployable. Every build that passes
+# the scan is attested (SLSA build provenance, signed by this workflow and stored
+# on GitHub), and the deploy script deploys only a release-tag (vX.Y.Z) build: it
+# verifies the attestation names this workflow, the tag's ref and the tag's commit,
+# then pins the digest. Main builds, manual runs on a branch and other v* tag builds
+# are attested too but never deployable (a manual run on a release tag rebuilds that
+# tag from the same workflow and commit, and is deployable); the policy lives in the
+# verifier. Tests are not run here: ci.yml runs them on the same commit; this
 # workflow only assembles and ships the artifact (-DskipTests).
 name: image
 on:
@@ -122,11 +126,32 @@ jobs:
             echo '```'
             # Same tag form the deploy script accepts.
             if [ "${GITHUB_REF_TYPE}" = "tag" ] && [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Deploy it, once the attestation step below has finished, with: scripts/azure-poc-deploy.sh ${GITHUB_REF_NAME}"
+              echo "Deploy it, once the scan and attestation steps below have finished, with: scripts/azure-poc-deploy.sh ${GITHUB_REF_NAME}"
             else
               echo "Not deployable: the deploy script takes only release-tag (vX.Y.Z) builds."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Scan the image for fixable CRITICAL and HIGH vulnerabilities
+        # #58 box 2. Scans the image just pushed, by the same repo@digest the
+        # attestation names: the base image's OS packages (ubuntu, from
+        # eclipse-temurin:21-jre) and the Java dependencies nested in /app.jar. A
+        # fixable CRITICAL or HIGH fails this step, so the attestation below never
+        # runs and the deploy script refuses the build; the image stays in the
+        # registry for triage. Unfixed findings are excluded (ignore-unfixed):
+        # nothing in this repo can remedy them. The scan resolves the digest from
+        # the local daemon (docker records RepoDigests on push), so no pull. Trivy's
+        # vulnerability DBs come from its default mirrors; no credential is needed.
+        # Baseline when this landed (2026-11-04): zero fixable CRITICAL/HIGH on a
+        # fresh main build and on v0.3.0.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.push.outputs.digest }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          timeout: 10m
       - name: Attest build provenance
         # No push-to-registry: the deploy script verifies with gh, which reads the
         # attestation from GitHub, so a registry copy would have no consumer.
