@@ -134,7 +134,8 @@ here builds `connect-library` from source any more and this repository needs no 
 the `sdk` build resolves the published `gateway-engine` and `connect-library` from GitHub
 Packages, which does need a packages-read credential (README, CI). The banner's "or a direct
 `connect-library` pin" is also out of date: `connect-gateway/pom.xml` has pinned
-`connect-library` directly again since commit 3f97be2 (2026-08-27, `${connect-library.version}`),
+`connect-library` directly again since commit 3f97be2 (2026-08-27, `${connect-library.version}`,
+5.0.0 at the time of this note, not the `0.0.1-SNAPSHOT` the body above names),
 and since #82 the `enforce-connect-library-pin` enforcer execution fails the build when that pin
 and the version `gateway-engine` requests differ. The verbatim, no-fork rule stands.
 
@@ -336,10 +337,10 @@ reproducibility, and the SDK modules are still consumed verbatim from upstream.
 
 **UPDATED 2026-11-03:** `third_party/connect-api/` is removed
 (`tsanetgit/Fin-Intercom_App#97`). Since the Fin swap (#42, 2026-08-11) the build consumes
-the published `gateway-engine` and `connect-library` artifacts, and since #82 they are held to
-one version (the `enforce-connect-library-pin` enforcer rule in `connect-gateway/pom.xml` fails
-the build when the adapter's direct `connect-library` pin and the version `gateway-engine`
-requests differ), so nothing in this repository ran codegen against the copy, and by
+the published `gateway-engine` and `connect-library` artifacts, so nothing in this repository
+ran codegen against the copy; since #82 the two artifacts are held to one version (the
+`enforce-connect-library-pin` enforcer rule in `connect-gateway/pom.xml` fails the build when
+the adapter's direct `connect-library` pin and the version `gateway-engine` requests differ). By
 removal it had fallen behind the production 3.2.5 spec (`diff` of the two files: 1916 lines
 marked `<` or `>`). The drift control moves with the consumer: `tsanet-ops` snapshots the
 upstream spec per branch into `tsanet_ops.api_spec_snapshots`, and nothing in this
