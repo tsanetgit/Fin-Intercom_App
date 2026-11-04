@@ -37,7 +37,9 @@ import org.tsanet.connector.intercom.SubmissionLinkTable;
  * back from Intercom — including the named datetime-format assertion for "Respond
  * By" that D5 promises.
  *
- * <p>Env-gated on BOTH credential sets; CI (secretless) skips it green. Each run
+ * <p>Env-gated on BOTH credential sets; CI (secretless) skips it green. Once gated in it
+ * also needs {@code INTERCOM_DEV_WORKSPACE} and {@code TSANET_SDK2_COMPANY_NAME}, with no
+ * fallback: the real identities live only in the environment. Each run
  * creates one test-flagged BETA case and one dev-workspace ticket (title-tagged
  * "E2E slice-3", accumulating deliberately — the dev workspace exists for this).
  */
@@ -150,8 +152,19 @@ class OutboundPhase1ExitE2ETest {
         return json.readTree(response == null ? "{}" : response);
     }
 
+    /** No fallback on purpose: a missing variable fails here, naming itself, instead of
+     * the test running against an identity baked into the source. */
+    private static String requireEnv(String name) {
+        String value = System.getenv(name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(name + " is not set; it is required once"
+                    + " TSANET_SDK1_API_USER and INTERCOM_DEV_ACCESS_TOKEN gate this test in");
+        }
+        return value;
+    }
+
     private String canvasBody(String ticketId, String flowId, String componentId, String inputValuesJson) {
-        String context = "\"workspace_id\":\"" + System.getenv().getOrDefault("INTERCOM_DEV_WORKSPACE", "nxdyoagx")
+        String context = "\"workspace_id\":\"" + requireEnv("INTERCOM_DEV_WORKSPACE")
                 + "\",\"admin\":{\"name\":\"E2E Driver\",\"email\":\""
                 + System.getenv("TSANET_SDK1_API_USER") + "\"},"
                 + "\"conversation\":{\"id\":" + ticketId + "},"
@@ -215,13 +228,15 @@ class OutboundPhase1ExitE2ETest {
 
     @Test
     void outboundCaseFromFinSideToBetaPartnerEndToEnd() throws Exception {
+        // Fail on a missing identity before anything is created on BETA or in the workspace.
+        requireEnv("INTERCOM_DEV_WORKSPACE");
+        String partnerQuery = requireEnv("TSANET_SDK2_COMPANY_NAME");
         String ticketId = createTicket(ticketTypeId(), contactId());
 
         JsonNode home = canvas("/canvas/initialize", canvasBody(ticketId, null, null, null));
         String flow = home.at("/canvas/stored_data/flow_id").asText();
         assertTrue(!flow.isBlank());
 
-        String partnerQuery = System.getenv().getOrDefault("TSANET_SDK2_COMPANY_NAME", "sdk2");
         JsonNode results = canvas("/canvas/submit", canvasBody(ticketId, flow, "search",
                 "{\"q\":\"" + partnerQuery + "\"}"));
         String selectKey = componentIdStartingWith(results, "select:");

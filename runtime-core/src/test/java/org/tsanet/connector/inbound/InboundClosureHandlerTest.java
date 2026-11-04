@@ -26,15 +26,15 @@ import org.tsanet.connector.webhooks.TsanetCloudEvent;
 class InboundClosureHandlerTest {
 
     private static final String TOKEN = "inbound-closed";
-    private static final String TICKET = "215475371561486";
-    private static final String RESOLVED = "9619799";
+    private static final String TICKET = "100000000000002";
+    private static final String RESOLVED = "9000004";
 
     private final FakeIntercomGateway intercom = new FakeIntercomGateway(new MockEnvironment());
     private final SubmissionLinkTable links = new InMemorySubmissionLinkTable();
 
     private InboundClosureHandler handler(String stateId) {
         return new InboundClosureHandler(intercom, links,
-                InboundProperties.ofTicketTypeAndResolvedState("4561712", stateId));
+                InboundProperties.ofTicketTypeAndResolvedState("4000001", stateId));
     }
 
     private static InboundEvent closed(String token) {
@@ -159,7 +159,7 @@ class InboundClosureHandlerTest {
             }
         };
         InboundClosureHandler h = new InboundClosureHandler(intercom, neverCas,
-                InboundProperties.ofTicketTypeAndResolvedState("4561712", RESOLVED));
+                InboundProperties.ofTicketTypeAndResolvedState("4000001", RESOLVED));
 
         h.handle(closed(TOKEN));
         assertEquals(RESOLVED, intercom.stateOf(TICKET), "the ticket still resolves");

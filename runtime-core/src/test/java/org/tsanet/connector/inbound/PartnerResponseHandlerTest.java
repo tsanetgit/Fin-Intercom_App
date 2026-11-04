@@ -23,19 +23,19 @@ import org.tsanet.connector.webhooks.TsanetCloudEvent;
  * Partner response surfacing: a verdict lands on the ticket exactly once per
  * TRANSITION, however many deliveries carry it.
  *
- * <p>The shape under test is the live Veritas accept (2026-08-11): six events in one
+ * <p>The shape under test is a live partner accept (2026-08-11): six events in one
  * second for one verdict. Most of these probes assert what must NOT happen — a
  * duplicate note, a surfaced echo of our own action, a guessed state id, a dedup
  * record written before the platform writes landed.
  */
 class PartnerResponseHandlerTest {
 
-    private static final String TOKEN = "veritas-e2e";
-    private static final String TICKET = "215475371079018";
-    private static final String IN_PROGRESS = "9619797";
-    private static final String WAITING = "9619798";
-    private static final String RESOLVED = "9619799";
-    private static final String PARTNER = "Veritas Technologies | Veritas Global Support";
+    private static final String TOKEN = "partner-e2e";
+    private static final String TICKET = "100000000000003";
+    private static final String IN_PROGRESS = "9000002";
+    private static final String WAITING = "9000003";
+    private static final String RESOLVED = "9000004";
+    private static final String PARTNER = "Partner Co | Partner Co Global Support";
 
     private final FakeTsanetGateway tsanet = new FakeTsanetGateway(new MockEnvironment());
     private final FakeIntercomGateway intercom = new FakeIntercomGateway(new MockEnvironment());
@@ -43,7 +43,7 @@ class PartnerResponseHandlerTest {
 
     private PartnerResponseHandler handler() {
         return new PartnerResponseHandler(tsanet, intercom, links,
-                InboundProperties.ofStateIds("4561712", IN_PROGRESS, WAITING, RESOLVED));
+                InboundProperties.ofStateIds("4000001", IN_PROGRESS, WAITING, RESOLVED));
     }
 
     private static InboundEvent response(String token, TsanetCloudEvent.Type type) {
@@ -60,7 +60,7 @@ class PartnerResponseHandlerTest {
     }
 
     private void outboundLink(String token, String ticketId) {
-        links.record(new SubmissionLink(token, "out:" + token, "nxdyoagx", ticketId,
+        links.record(new SubmissionLink(token, "out:" + token, "w-test", ticketId,
                 ticketId, PARTNER, null, true, "agent@example.com", Instant.now()));
         links.anchor(token, ticketId);
     }
@@ -71,7 +71,7 @@ class PartnerResponseHandlerTest {
 
     private void fetchAnswers(String token, InboundCase.Direction direction,
             InboundCase.Status status) {
-        tsanet.seedFetch(new InboundCase(token, direction, status, "Veritas Technologies",
+        tsanet.seedFetch(new InboundCase(token, direction, status, "Partner Co",
                 "DB down", "desc", "2026-08-12T12:00:00Z", "HIGH", true));
     }
 
@@ -162,7 +162,7 @@ class PartnerResponseHandlerTest {
         outboundLink(TOKEN, TICKET);
         fetchAnswers(TOKEN, InboundCase.Status.INFORMATION);
         PartnerResponseHandler h = new PartnerResponseHandler(tsanet, intercom, links,
-                InboundProperties.ofStateIds("4561712", IN_PROGRESS, null, RESOLVED));
+                InboundProperties.ofStateIds("4000001", IN_PROGRESS, null, RESOLVED));
 
         h.handle(responseCreated(TOKEN));
         assertEquals(0, intercom.stateMoveCalls(),
@@ -231,7 +231,7 @@ class PartnerResponseHandlerTest {
             }
         };
         PartnerResponseHandler h = new PartnerResponseHandler(tsanet, intercom, recordFailsOnce,
-                InboundProperties.ofStateIds("4561712", IN_PROGRESS, WAITING, RESOLVED));
+                InboundProperties.ofStateIds("4000001", IN_PROGRESS, WAITING, RESOLVED));
 
         h.handle(responseCreated(TOKEN));
         assertEquals(1, intercom.noteCalls(), "the note landed before the record failed");
@@ -299,7 +299,7 @@ class PartnerResponseHandlerTest {
 
     /** An outbound submit from a plain Inbox conversation: no ticket, so no state move. */
     private void ticketlessLink(String token, String conversationId) {
-        links.record(new SubmissionLink(token, "out:" + token, "nxdyoagx", conversationId,
+        links.record(new SubmissionLink(token, "out:" + token, "w-test", conversationId,
                 null, PARTNER, null, true, "agent@example.com", Instant.now()));
     }
 
@@ -347,7 +347,7 @@ class PartnerResponseHandlerTest {
         fetchAnswers(TOKEN, InboundCase.Status.ACCEPTED);
 
         new PartnerResponseHandler(tsanet, intercom, links,
-                InboundProperties.ofStateIds("4561712", null, null, null))
+                InboundProperties.ofStateIds("4000001", null, null, null))
                 .handle(responseCreated(TOKEN));
 
         assertEquals(1, intercom.noteCalls());
@@ -358,7 +358,7 @@ class PartnerResponseHandlerTest {
     void aLinkWithNeitherAnchorIsRefused() {
         // Nothing to write on. Distinct from the ticketless case, which has a
         // conversation: this one would have posted to a null id.
-        links.record(new SubmissionLink(TOKEN, "out:" + TOKEN, "nxdyoagx", null,
+        links.record(new SubmissionLink(TOKEN, "out:" + TOKEN, "w-test", null,
                 null, PARTNER, null, true, "agent@example.com", Instant.now()));
         fetchAnswers(TOKEN, InboundCase.Status.ACCEPTED);
 

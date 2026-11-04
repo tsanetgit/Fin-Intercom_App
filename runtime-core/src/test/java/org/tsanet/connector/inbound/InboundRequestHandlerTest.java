@@ -26,7 +26,7 @@ import org.tsanet.connector.webhooks.TsanetCloudEvent;
  */
 class InboundRequestHandlerTest {
 
-    private static final String TYPE_ID = "4561712";
+    private static final String TYPE_ID = "4000001";
 
     private final FakeTsanetGateway tsanet = new FakeTsanetGateway(new MockEnvironment());
     private final FakeIntercomGateway intercom = new FakeIntercomGateway(new MockEnvironment());

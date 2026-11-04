@@ -137,12 +137,12 @@ class RestIntercomGatewayTest {
     @Test
     void stateMoveWritesTheIdAndReadsBackClosed() {
         server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
-                .andExpect(content().json("{\"ticket_state_id\":\"9619799\"}"))
+                .andExpect(content().json("{\"ticket_state_id\":\"9000004\"}"))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess("{\"open\":false,\"ticket_state\":\"Resolved\"}",
                         MediaType.APPLICATION_JSON));
-        gateway.moveTicketState("ticket-9", "9619799");
+        gateway.moveTicketState("ticket-9", "9000004");
         server.verify();
     }
 
@@ -157,7 +157,7 @@ class RestIntercomGatewayTest {
                 .andRespond(withSuccess("{\"open\":true,\"ticket_state\":\"Submitted\"}",
                         MediaType.APPLICATION_JSON));
         IntercomException e = assertThrows(IntercomException.class,
-                () -> gateway.moveTicketState("ticket-9", "9619799"));
+                () -> gateway.moveTicketState("ticket-9", "9000004"));
         assertTrue(e.getMessage().contains("resolved-state-id"),
                 "the hint must point at the per-workspace configuration, the one thing an"
                         + " operator can actually fix: " + e.getMessage());
@@ -170,12 +170,12 @@ class RestIntercomGatewayTest {
     @Test
     void openStateMoveVerifiesByTheReadBackId() {
         server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
-                .andExpect(content().json("{\"ticket_state_id\":\"9619797\"}"))
+                .andExpect(content().json("{\"ticket_state_id\":\"9000002\"}"))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.GET))
-                .andRespond(withSuccess("{\"open\":true,\"ticket_state\":{\"id\":\"9619797\","
+                .andRespond(withSuccess("{\"open\":true,\"ticket_state\":{\"id\":\"9000002\","
                         + "\"category\":\"in_progress\"}}", MediaType.APPLICATION_JSON));
-        gateway.moveOpenTicketState("ticket-9", "9619797");
+        gateway.moveOpenTicketState("ticket-9", "9000002");
         server.verify();
     }
 
@@ -186,10 +186,10 @@ class RestIntercomGatewayTest {
         server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.PUT))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.GET))
-                .andRespond(withSuccess("{\"open\":true,\"ticket_state\":{\"id\":\"9619796\","
+                .andRespond(withSuccess("{\"open\":true,\"ticket_state\":{\"id\":\"9000001\","
                         + "\"category\":\"submitted\"}}", MediaType.APPLICATION_JSON));
         IntercomException e = assertThrows(IntercomException.class,
-                () -> gateway.moveOpenTicketState("ticket-9", "9619797"));
+                () -> gateway.moveOpenTicketState("ticket-9", "9000002"));
         assertTrue(e.getMessage().contains("did not land"),
                 "an unmoved state must surface as failure: " + e.getMessage());
     }
@@ -205,7 +205,7 @@ class RestIntercomGatewayTest {
                 .andRespond(withSuccess("{\"open\":true,\"ticket_state\":\"submitted\"}",
                         MediaType.APPLICATION_JSON));
         IntercomException e = assertThrows(IntercomException.class,
-                () -> gateway.moveOpenTicketState("ticket-9", "9619797"));
+                () -> gateway.moveOpenTicketState("ticket-9", "9000002"));
         assertTrue(e.getMessage().contains("unverifiable"),
                 "the error must say WHY: the version predates the object shape: " + e.getMessage());
     }
@@ -253,7 +253,7 @@ class RestIntercomGatewayTest {
         server.expect(requestTo(BASE + "/tickets/ticket-9")).andExpect(method(HttpMethod.GET))
                 .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
         IntercomException e = assertThrows(IntercomException.class,
-                () -> gateway.moveTicketState("ticket-9", "9619799"));
+                () -> gateway.moveTicketState("ticket-9", "9000004"));
         assertTrue(e.getMessage().contains("state read-back"),
                 "a failed read-back proves nothing landed; it must not surface as success: "
                         + e.getMessage());

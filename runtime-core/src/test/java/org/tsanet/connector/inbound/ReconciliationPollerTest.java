@@ -25,7 +25,7 @@ import org.tsanet.connector.tsanet.dto.InboundCase;
  */
 class ReconciliationPollerTest {
 
-    private static final String TYPE = "4561712";
+    private static final String TYPE = "4000001";
 
     private final FakeTsanetGateway tsanet = new FakeTsanetGateway(new MockEnvironment());
     private final FakeIntercomGateway intercom = new FakeIntercomGateway(new MockEnvironment());

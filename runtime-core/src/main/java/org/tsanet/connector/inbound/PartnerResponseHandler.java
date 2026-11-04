@@ -16,7 +16,7 @@ import org.tsanet.connector.webhooks.TsanetCloudEvent;
 /**
  * A partner responded to our outbound case; surface the verdict on the ticket.
  *
- * <p>Without this, response events drain and drop — observed live 2026-08-11: Veritas
+ * <p>Without this, response events drain and drop — observed live 2026-08-11: a partner
  * accepted an outbound case and the six-event webhook batch produced nothing on the
  * ticket, so a teammate learns of an accept only by opening the panel
  * ({@code tsanetgit/Fin-Intercom_App#45}). Surfacing is two writes: the ticket state
@@ -38,7 +38,7 @@ import org.tsanet.connector.webhooks.TsanetCloudEvent;
  * case no longer holds.
  *
  * <p><b>Once per transition, not once per delivery.</b> One verdict arrives as a burst
- * (five status-bearing events in one second, observed on the Veritas accept), and
+ * (five status-bearing events in one second, observed on a live partner accept), and
  * at-least-once delivery can add more. The dedup record is
  * {@link SubmissionLinkTable#surfacedStatus(String)} — durable, so it survives a
  * restart, which matters because redelivery is the ONLY recovery surface (the intake
