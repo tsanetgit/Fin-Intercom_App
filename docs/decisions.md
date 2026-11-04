@@ -576,7 +576,7 @@ know the registered domains — the validated problem+json `detail` is the only 
 So the acting teammate is a default, not a lock, and the rejection renders beside the
 email field with the typed values preserved: one correction and a resubmit.
 
-**`caseNumber` is the ticket number, not the ticket id.** Probed live: an Intercom
+**`caseNumber` is the ticket number, not the ticket id.** Probed live (ids illustrative): an Intercom
 ticket carries `id` (`100000000000001`, the API handle) and `ticket_id`
 (`100000001`, the `#`-number an agent sees and can search). The partner quotes our
 case number back, so it must be the searchable one.
