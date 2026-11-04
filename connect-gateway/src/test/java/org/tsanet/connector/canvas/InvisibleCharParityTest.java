@@ -49,7 +49,7 @@ import org.tsanet.gateway.engine.SdkTsanetGateway;
  *
  * <p>WHERE THIS RUNS: connect-gateway is outside the default reactor (D6), so
  * this class runs only under {@code -Psdk} — which the CI sdk job now does on
- * every PR, against the vendored spec (D11). It was previously a local-only
+ * every PR, against the published engine (D6 and D11, updated 2026-11-03). It was previously a local-only
  * gate: the job skipped every real step behind an unset CONNECT_API_CODE_TOKEN
  * while reporting success, so a failure here never reached anyone. Treat a
  * failure as a CI signal.

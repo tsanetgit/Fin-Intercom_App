@@ -107,6 +107,8 @@ the reconciliation poller remains the source of truth in both directions.
 > sources or a direct connect-library pin - it consumes
 > `org.tsanet.connector:gateway-engine` (which pins connect-library), and the
 > module is the sdk-mode assembly only.
+> **Superseded in part 2026-11-03:** the module does carry a direct `connect-library` pin
+> again; see the UPDATED note at the end of this record.
 
 
 `runtime-core` has no Connect SDK dependency and must never import `com.tsanet.*`.
@@ -125,6 +127,17 @@ on every PR. The verbatim-SDK rule above is unaffected.
 (`tsanetgit/Connect_SDK#44`); the SDK stack is now consumed from `Connect_SDK`
 `main` (`shawn-tsanet/connect-sdk-demo` repointed in `shawn-tsanet/connect-sdk-demo#9`).
 The verbatim, no-fork rule and the vendored-spec mechanics (D11) are unchanged.
+
+**UPDATED 2026-11-03:** the vendored copy is removed (D11, updated the same day), so the
+"no sibling checkout and no credential" sentence above no longer describes the build. Nothing
+here builds `connect-library` from source any more and this repository needs no spec at all;
+the `sdk` build resolves the published `gateway-engine` and `connect-library` from GitHub
+Packages, which does need a packages-read credential (README, CI). The banner's "or a direct
+`connect-library` pin" is also out of date: `connect-gateway/pom.xml` has pinned
+`connect-library` directly again since commit 3f97be2 (2026-08-27, `${connect-library.version}`,
+5.0.0 at the time of this note, not the `0.0.1-SNAPSHOT` the body above names),
+and since #82 the `enforce-connect-library-pin` enforcer execution fails the build when that pin
+and the version `gateway-engine` requests differ. The verbatim, no-fork rule stands.
 
 ## D7. Skeleton non-goals
 
@@ -274,7 +287,7 @@ form fields are ASSUMED to be filled server-side from the form template (no live
 receipt yet - sdk2's form has none); if the API instead expects the client to echo
 template values, submission fails loud and problem+json detail names the field.
 
-## D11. The API spec is vendored, so CI needs no cross-org credential
+## D11. The API spec is vendored, so CI needs no cross-org credential (superseded 2026-11-03 except the visibility rule, see UPDATED below)
 
 `connect-library`'s codegen reads the Connect transport contract through the Maven
 property `connect.openapi.spec`, defined in the demo repo's parent pom as a sibling
@@ -321,6 +334,25 @@ Consequences accepted, each with its control:
 
 This does not fork the SDK (D6 stands): the spec is a build INPUT, pinned for
 reproducibility, and the SDK modules are still consumed verbatim from upstream.
+
+**UPDATED 2026-11-03:** `third_party/connect-api/` is removed
+(`tsanetgit/Fin-Intercom_App#97`). Since the Fin swap (#42, 2026-08-11) the build consumes
+the published `gateway-engine` and `connect-library` artifacts, so nothing in this repository
+ran codegen against the copy; since #82 the two artifacts are held to one version (the
+`enforce-connect-library-pin` enforcer rule in `connect-gateway/pom.xml` fails the build when
+the adapter's direct `connect-library` pin and the version `gateway-engine` requests differ). By
+removal it had fallen behind the production 3.2.5 spec (`diff` of the two files: 1916 lines
+marked `<` or `>`). The drift control moves with the consumer: `tsanet-ops` snapshots the
+upstream spec per branch into `tsanet_ops.api_spec_snapshots`, and nothing in this
+repository is compared against it any more; this adapter's only exposure to the transport
+contract is the `connect-library` version it pins, so a contract change reaches it as a
+version bump. Of the controls listed above, three retire with the file: the sidecar provenance
+README, the hash drift check against it, and the matched pair with the demo ref (the demo
+checkout itself left with #42). And "with no secret at all" no longer holds: the `sdk` job
+needs `PACKAGES_READ_TOKEN` to resolve the published artifacts and fails at its first step
+without it (`ci.yml`). Two things do not change: the file stays in git history, so
+the visibility rule above still binds and this repository is not made public without
+upstream sign-off; and the verbatim-SDK rule.
 
 ## D12. The link table is durable, on SQLite, and the volume is part of the design
 
@@ -765,8 +797,9 @@ conflate them.
 ### Deliberately unmapped
 
 - **`PENDINGACTION`** — undocumented in BOTH contracts, verified rather than assumed: it
-  is a bare enum member in `third_party/connect-api/openapi.yaml` with no description
-  (the transport contract), and a GitBook RAG search returns zero results (the business
+  is a bare enum member with no description in the Connect API spec, the transport contract
+  (`connect-core-api/src/main/resources/openapi.yaml` in `tsanetgit/Connect-API-Code`, still
+  bare at tag 3.2.5), and a GitBook RAG search returns zero results (the business
   contract). We cannot map a status nobody has defined. **Open question for TSANet.**
 - **`UNKNOWN`** — an unrecognised wire value by construction, so mapping it would be
   guessing at exactly the moment the wire has drifted.

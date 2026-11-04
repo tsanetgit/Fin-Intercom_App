@@ -63,9 +63,10 @@ is the only open route.
 
 ## CI
 
-`ci.yml` builds and tests `runtime-core`, and the `sdk` job builds `connect-library`
-from the pinned public demo repo against the vendored spec, then runs the `sdk`
-profile. **Both jobs run on every PR and neither needs a secret.** The `sdk` job was
+`ci.yml` builds and tests `runtime-core`, and the `sdk` job resolves the published
+`gateway-engine` and `connect-library` from GitHub Packages with the `PACKAGES_READ_TOKEN`
+secret, then runs the `sdk` profile. **Both jobs run on every PR; `core` needs no secret,
+and `sdk` fails at its first step when the token is missing instead of skipping.** The `sdk` job was
 previously gated on `CONNECT_API_CODE_TOKEN` for a private checkout; that secret was
 never configured, so the job skipped every real step while reporting success — the
 gateway tests had never run in CI.
