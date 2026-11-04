@@ -126,6 +126,10 @@ on every PR. The verbatim-SDK rule above is unaffected.
 `main` (`shawn-tsanet/connect-sdk-demo` repointed in `shawn-tsanet/connect-sdk-demo#9`).
 The verbatim, no-fork rule and the vendored-spec mechanics (D11) are unchanged.
 
+**UPDATED 2026-11-03:** the vendored copy is removed (D11, updated the same day). Nothing
+here builds `connect-library` from source any more, so this repository needs no spec at all;
+the verbatim, no-fork rule stands.
+
 ## D7. Skeleton non-goals
 
 No Spring Security (the HMAC filter is the whole auth story). No async executors (the
@@ -321,6 +325,20 @@ Consequences accepted, each with its control:
 
 This does not fork the SDK (D6 stands): the spec is a build INPUT, pinned for
 reproducibility, and the SDK modules are still consumed verbatim from upstream.
+
+**UPDATED 2026-11-03:** `third_party/connect-api/` is removed
+(`tsanetgit/Fin-Intercom_App#97`). Since the Fin swap (#42, 2026-08-11) the build consumes
+the published `gateway-engine` and `connect-library` artifacts, pinned to one version (the
+`enforce-connect-library-pin` enforcer rule in `connect-gateway/pom.xml` fails the build when
+the two pins differ), so nothing in this repository ran codegen against the copy, and by
+removal it had fallen behind the production 3.2.5 spec (`diff` of the two files: 1916 lines
+marked `<` or `>`). The drift control moves with the consumer: `tsanet-ops` snapshots the
+upstream spec per branch into `tsanet_ops.api_spec_snapshots`, and nothing in this
+repository is compared against it any more; this adapter's only exposure to the transport
+contract is the `connect-library` version it pins, so a contract change reaches it as a
+version bump. Two things do not change: the file stays in git history, so
+the visibility rule above still binds and this repository is not made public without
+upstream sign-off; and the verbatim-SDK rule.
 
 ## D12. The link table is durable, on SQLite, and the volume is part of the design
 
@@ -765,8 +783,9 @@ conflate them.
 ### Deliberately unmapped
 
 - **`PENDINGACTION`** — undocumented in BOTH contracts, verified rather than assumed: it
-  is a bare enum member in `third_party/connect-api/openapi.yaml` with no description
-  (the transport contract), and a GitBook RAG search returns zero results (the business
+  is a bare enum member with no description in the Connect API spec, the transport contract
+  (`connect-core-api/src/main/resources/openapi.yaml` in `tsanetgit/Connect-API-Code`, still
+  bare at tag 3.2.5), and a GitBook RAG search returns zero results (the business
   contract). We cannot map a status nobody has defined. **Open question for TSANet.**
 - **`UNKNOWN`** — an unrecognised wire value by construction, so mapping it would be
   guessing at exactly the moment the wire has drifted.
