@@ -37,8 +37,8 @@ connector:
     # under `Intercom-Version: Unstable`, so resolve it out of band and set it here.
     # Unset means inbound closure is refused rather than guessed — a wrong id may move
     # the ticket to some unrelated state instead of failing.
-    # Dev workspace, type 4561712: Submitted 9619796, In progress 9619797,
-    # Waiting on customer 9619798, Resolved 9619799.
+    # Illustrative values from one dev workspace (every workspace differs): type 4000001:
+    # Submitted 9000001, In progress 9000002, Waiting on customer 9000003, Resolved 9000004.
     resolved-state-id: ${INTERCOM_RESOLVED_STATE_ID:}
     # The two NON-terminal targets in D17's mapping, surfaced by partner responses
     # (tsanetgit/Fin-Intercom_App#45): In progress = a partner accepted, Waiting on

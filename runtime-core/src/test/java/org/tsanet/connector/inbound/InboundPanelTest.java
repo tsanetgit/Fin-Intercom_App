@@ -25,11 +25,11 @@ class InboundPanelTest {
 
     private static final String TOKEN = "inbound-77";
     /** The API handle: what the link anchors on and what canvas payloads carry. */
-    private static final String TICKET = "215475361003303";
+    private static final String TICKET = "100000000000001";
     /** The agent-facing number: the ONLY thing that may be quoted to a partner.
      * Deliberately unlike TICKET — an earlier version of this test used one value for
      * both and so asserted the defect it was meant to catch (#17 QA round). */
-    private static final String TICKET_NUMBER = "121556608";
+    private static final String TICKET_NUMBER = "100000001";
 
     @BeforeEach
     void anchorAnInboundCase() {

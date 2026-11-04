@@ -217,10 +217,10 @@ public abstract class SubmissionLinkTableContractTest {
     void theCaseNumberWeQuotedIsRecorded() {
         table().record(link("TSA-num", "flow-num", "conv-num"));
         assertNull(table().byToken("TSA-num").orElseThrow().caseNumber());
-        table().caseNumber("TSA-num", "121556608");
-        assertEquals("121556608", table().byToken("TSA-num").orElseThrow().caseNumber());
+        table().caseNumber("TSA-num", "100000001");
+        assertEquals("100000001", table().byToken("TSA-num").orElseThrow().caseNumber());
         table().caseNumber("TSA-num", "  ");  // blank never overwrites what we sent
-        assertEquals("121556608", table().byToken("TSA-num").orElseThrow().caseNumber());
+        assertEquals("100000001", table().byToken("TSA-num").orElseThrow().caseNumber());
     }
 
     @Test

@@ -577,8 +577,8 @@ So the acting teammate is a default, not a lock, and the rejection renders besid
 email field with the typed values preserved: one correction and a resubmit.
 
 **`caseNumber` is the ticket number, not the ticket id.** Probed live: an Intercom
-ticket carries `id` (`215475361003303`, the API handle) and `ticket_id`
-(`121556608`, the `#`-number an agent sees and can search). The partner quotes our
+ticket carries `id` (`100000000000001`, the API handle) and `ticket_id`
+(`100000001`, the `#`-number an agent sees and can search). The partner quotes our
 case number back, so it must be the searchable one.
 
 The number is captured at ticket-create time, from the create response, and recorded
@@ -784,14 +784,14 @@ discipline as `direction()` returning UNKNOWN rather than picking.
 - **Write**: `PUT /tickets/{id}` requires `ticket_state_id` — a numeric id, not the
   string it reads back. Nothing lets you set the state by name.
 
-**The ids are per-workspace, and enumerating them is a trap.** For this dev workspace's
-"TSANet Collaboration" type (4561712):
+**The ids are per-workspace, and enumerating them is a trap.** For one dev workspace's
+"TSANet Collaboration" type (ids illustrative; every workspace differs):
 
 ```
-Submitted            9619796
-In progress          9619797
-Waiting on customer  9619798
-Resolved             9619799
+Submitted            9000001
+In progress          9000002
+Waiting on customer  9000003
+Resolved             9000004
 ```
 
 Those came back **only under `Intercom-Version: Unstable`**. Versions 2.8, 2.9, 2.10 and
@@ -1057,7 +1057,7 @@ collaboration can be **answered** and then **retired** without ever becoming a t
 
 ### Measured live on BETA, 2026-08-14
 
-Submitter Test Zendesk -> receiver Test Company 3, document 2122, every request carrying
+Submitter `<test company A>` -> receiver `<test company B>`, document `<document id>`, every request carrying
 `Accept: application/problem+json` so rejections arrive as RFC 7807 rather than the legacy
 500 (D10, Connect-API-Code#122).
 
