@@ -131,30 +131,57 @@ jobs:
               echo "Not deployable: the deploy script takes only release-tag (vX.Y.Z) builds."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Install Trivy
+        # Pinned by version and by the SHA-256 of the release tarball, fetched from the
+        # GitHub release and checked before anything runs; a mismatch fails the job
+        # here. The project's own installer (aquasecurity/setup-trivy, which
+        # aquasecurity/trivy-action wraps) downloads from get.trivy.dev, which stopped
+        # resolving on 2026-11-03 (aquasecurity/setup-trivy#42), and a wrapper action
+        # would also run third-party composite steps inside this job, which holds the
+        # OIDC signing identity and an AcrPush session. A hash-pinned binary is the
+        # smaller trust. Bump TRIVY_VERSION and TRIVY_SHA256 together, from
+        # trivy_<version>_checksums.txt on the release.
+        env:
+          TRIVY_VERSION: 0.70.0
+          TRIVY_SHA256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/trivy.tgz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  /tmp/trivy.tgz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/trivy.tgz -C "$HOME/.local/bin" trivy
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/trivy" --version
+      - name: Cache key for the Trivy databases
+        id: today
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - name: Cache the Trivy vulnerability databases
+        # trivy-db (~130 MB) and trivy-java-db (~950 MB) come from Trivy's default
+        # mirrors with no credential. One cache entry per day; trivy refreshes a
+        # stale DB on its own, so a restore from an older day still works.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ steps.today.outputs.date }}
+          restore-keys: trivy-db-
       - name: Scan the image for fixable CRITICAL and HIGH vulnerabilities
         # #58 box 2. Scans the image just pushed, by the same repo@digest the
         # attestation names: the base image's OS packages (ubuntu, from
         # eclipse-temurin:21-jre) and the Java dependencies nested in /app.jar. A
         # fixable CRITICAL or HIGH fails this step, so the attestation below never
         # runs and the deploy script refuses the build; the image stays in the
-        # registry for triage. Unfixed findings are excluded (ignore-unfixed):
-        # nothing in this repo can remedy them. The scan resolves the digest from
-        # the local daemon (docker records RepoDigests on push), so no pull. Trivy's
-        # vulnerability DBs come from its default mirrors; no credential is needed.
-        # The scanner version is pinned (version:) so the gate is reproducible;
-        # bump it with the action, not on its own.
-        # Baseline when this landed (2026-11-04): zero fixable CRITICAL/HIGH on a
-        # fresh main build and on v0.3.0.
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ steps.push.outputs.digest }}
-          scanners: vuln
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-          format: table
-          timeout: 10m
-          version: v0.70.0
+        # registry for triage. Unfixed findings are excluded (--ignore-unfixed):
+        # nothing in this repo can remedy them. Trivy resolves the digest from the
+        # local daemon (docker records RepoDigests on push), so no pull. Baseline
+        # when this landed (2026-11-04): zero fixable CRITICAL/HIGH on a fresh main
+        # build and on v0.3.0.
+        env:
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed \
+            --exit-code 1 --format table --timeout 10m "$IMAGE_DIGEST"
       - name: Attest build provenance
         # No push-to-registry: the deploy script verifies with gh, which reads the
         # attestation from GitHub, so a registry copy would have no consumer.
