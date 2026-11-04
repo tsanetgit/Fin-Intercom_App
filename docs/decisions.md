@@ -130,8 +130,11 @@ The verbatim, no-fork rule and the vendored-spec mechanics (D11) are unchanged.
 "no sibling checkout and no credential" sentence above no longer describes the build. Nothing
 here builds `connect-library` from source any more and this repository needs no spec at all;
 the `sdk` build resolves the published `gateway-engine` and `connect-library` from GitHub
-Packages, which does need a packages-read credential (README, CI). The verbatim, no-fork
-rule stands.
+Packages, which does need a packages-read credential (README, CI). The banner's "or a direct
+`connect-library` pin" is also out of date: since #79 and #81 `connect-gateway/pom.xml` pins
+`connect-library` directly (`${connect-library.version}`, lines 85-86) and the
+`enforce-connect-library-pin` enforcer execution (line 119) fails the build when that pin and
+the version `gateway-engine` requests differ. The verbatim, no-fork rule stands.
 
 ## D7. Skeleton non-goals
 
@@ -281,7 +284,7 @@ form fields are ASSUMED to be filled server-side from the form template (no live
 receipt yet - sdk2's form has none); if the API instead expects the client to echo
 template values, submission fails loud and problem+json detail names the field.
 
-## D11. The API spec is vendored, so CI needs no cross-org credential
+## D11. The API spec is vendored, so CI needs no cross-org credential (retired 2026-11-03, see UPDATED below)
 
 `connect-library`'s codegen reads the Connect transport contract through the Maven
 property `connect.openapi.spec`, defined in the demo repo's parent pom as a sibling
