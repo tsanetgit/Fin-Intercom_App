@@ -78,11 +78,18 @@ no other scope. It has three consumers: the `sdk` job here, the `-Psdk` build in
 opens), which reads its own copy from the Dependabot secret store. The token expires;
 the current expiry date is recorded on
 [#56](https://github.com/tsanetgit/Fin-Intercom_App/issues/56). To rotate it,
-regenerate it as a classic PAT with `read:packages` only, set it in both the Actions and
-the Dependabot secret stores, and run `ci` on `main` (`gh workflow run ci.yml --ref main`);
-the `sdk` job must pass. That proves the token: the Maven cache `sdk` restores is the one
-`core` saved (`core` finishes first, and `sdk` needs it), which holds none of the private
-packages, so `sdk` fetches them from GitHub Packages with the token.
+regenerate it as a classic PAT with `read:packages` only and check it before storing it:
+this request must print `200` (it prints `401` without a token). `curl` asks for the token
+as a password, so it stays out of shell history.
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -u shawn-tsanet https://maven.pkg.github.com/tsanetgit/Connect_Gateway/org/tsanet/connector/gateway-engine/maven-metadata.xml
+```
+
+Then set that same value in both the Actions and the Dependabot secret stores, and record
+the new expiry date on #56. A green `sdk` job alone does not prove a new token: `image.yml`
+saves the same Maven cache key when it gets to the save first, and that cache holds the
+private packages.
 
 ## Status
 
