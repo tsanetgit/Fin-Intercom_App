@@ -1,6 +1,8 @@
-# Dependency currency (#58). Dependabot's maven updater reads only the pom in each
-# listed directory (it does not traverse <modules>), so all three poms are listed
-# explicitly. The github-actions entry also maintains the SHA-pinned `uses:` lines
+# Dependency currency (#58). Only the root directory is listed for maven: from the
+# root pom Dependabot follows <modules>, including those under a <profile>, so it
+# also reads runtime-core/pom.xml and connect-gateway/pom.xml. Listing the child
+# directories as well made every bump arrive as duplicate PRs (#111 and #112).
+# The github-actions entry also maintains the SHA-pinned `uses:` lines
 # in ci.yml — it recognizes the trailing `# vX.Y.Z` comment convention and updates
 # pin + comment together. Base-image (Dockerfile) scanning is deliberately not here:
 # it belongs with the CI image build that #55 introduces.
@@ -27,10 +29,7 @@ registries:
     password: ${{secrets.PACKAGES_READ_TOKEN}}
 updates:
   - package-ecosystem: "maven"
-    directories:
-      - "/"
-      - "/runtime-core"
-      - "/connect-gateway"
+    directory: "/"
     registries: "*"
     schedule:
       interval: "weekly"
